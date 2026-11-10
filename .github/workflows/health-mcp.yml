@@ -1,0 +1,20 @@
+name: health-mcp
+on:
+  pull_request:
+    paths: ["health-mcp/**", ".github/workflows/health-mcp.yml", ".github/workflows/_server.yml"]
+  push:
+    branches: [main]
+    paths: ["health-mcp/**", ".github/workflows/health-mcp.yml", ".github/workflows/_server.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    uses: ./.github/workflows/_server.yml
+    with:
+      name: health-mcp
+    permissions:
+      contents: read
+      packages: write

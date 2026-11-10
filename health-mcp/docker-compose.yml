@@ -1,0 +1,15 @@
+# Runs the published image. Updates arrive by pulling a new image (see the repo README).
+services:
+  health-mcp:
+    image: ghcr.io/kotharikhushal/health-mcp:latest
+    container_name: health-mcp
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "9102:8000"          # point the reverse proxy at this port
+    volumes:
+      - ./data:/data         # must be writable by uid 1000: chown 1000:1000 data
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
