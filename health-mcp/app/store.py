@@ -543,8 +543,22 @@ class Store:
     def sleep_by_day(self, days: int) -> dict[date, dict[str, Any]]:
         dates, start = self.window(days)
         out: dict[date, dict[str, Any]] = {d: {} for d in dates}
-        for r in self._rows("SELECT start_time,end_time,duration_seconds,stages FROM sleep "
-                            "WHERE end_time>=? ORDER BY end_time", (start,)):
+        rows = self._rows("SELECT start_time,end_time,duration_seconds,stages FROM sleep "
+                          "WHERE end_time>=? ORDER BY end_time", (start,))
+        # The watch re-sends a session as it grows (same start, later end), and each version is
+        # stored. Keep the longest version of a session and drop any that mostly overlaps it.
+        kept: list[Any] = []
+        spans: list[tuple[datetime, datetime]] = []
+        for r in sorted(rows, key=lambda x: -x["duration_seconds"]):
+            st, en = parse_ts(r["start_time"]), parse_ts(r["end_time"])
+            assert st and en
+            dur = max((en - st).total_seconds(), 1.0)
+            overlap = sum(max(0.0, (min(en, ke) - max(st, ks)).total_seconds()) for ks, ke in spans)
+            if overlap / dur > 0.5:
+                continue
+            kept.append(r)
+            spans.append((st, en))
+        for r in sorted(kept, key=lambda x: x["end_time"]):
             d = self.day_of(r["end_time"])
             if d not in out:
                 continue

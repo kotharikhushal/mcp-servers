@@ -265,3 +265,22 @@ def test_workout_energy_from_fifteen_minute_records():
     w = s.workouts(1)[0]
     assert w["kcal_total_during"] == 240
     assert w["kcal_above_resting_estimate"] == 180       # 240 minus 60 min at ~1 kcal/min
+
+
+def test_sleep_session_resent_longer_is_not_double_counted():
+    # The watch first reports a night ending 07:49, then the same night extended to 09:01.
+    s = make(now=datetime(2026, 11, 11, 12, 0, tzinfo=UTC))
+    s.ingest({"sleep": [{"session_end_time": "2026-11-11T07:49:00Z", "duration_seconds": 31740, "stages": []}]})
+    s.ingest({"sleep": [{"session_end_time": "2026-11-11T09:01:00Z", "duration_seconds": 36060, "stages": []}]})
+    assert s.status()["tables"]["sleep"]["rows"] == 2
+    day = s.sleep_by_day(1)[datetime(2026, 11, 11, tzinfo=UTC).date()]
+    assert day["sessions"] == 1 and day["asleep_seconds"] == 36060
+
+
+def test_sleep_night_and_nap_are_both_counted():
+    s = make(now=datetime(2026, 11, 9, 20, 0, tzinfo=UTC))
+    s.ingest({"sleep": [
+        {"session_end_time": "2026-11-09T07:49:00Z", "duration_seconds": 19920, "stages": []},
+        {"session_end_time": "2026-11-09T17:42:00Z", "duration_seconds": 4860, "stages": []}]})
+    day = s.sleep_by_day(1)[datetime(2026, 11, 9, tzinfo=UTC).date()]
+    assert day["sessions"] == 2 and day["asleep_seconds"] == 19920 + 4860
