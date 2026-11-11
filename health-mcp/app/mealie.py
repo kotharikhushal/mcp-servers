@@ -154,9 +154,36 @@ class Mealie:
         self._call("DELETE", f"{self._plans_path()}/{entry_id}")
         return {"deleted": True}
 
-    def shopping_lists(self) -> list[dict[str, Any]]:
+    def shopping_lists(self, with_items: bool = False) -> list[dict[str, Any]]:
+        """The list endpoint returns summaries without items, so each list is fetched by id for the real count."""
         data = self._call("GET", "/api/households/shopping/lists", params={"perPage": 50})
-        return [{"id": x.get("id"), "name": x.get("name"), "items": len(x.get("listItems") or [])} for x in data.get("items") or []]
+        out = []
+        for x in data.get("items") or []:
+            lid = str(x.get("id") or "")
+            full = self._call("GET", f"/api/households/shopping/lists/{lid}") if re.fullmatch(r"[A-Za-z0-9_-]+", lid) else x
+            items = full.get("listItems") or []
+            open_items = [i for i in items if not i.get("checked")]
+            row: dict[str, Any] = {"id": lid, "name": x.get("name"), "items": len(items), "unchecked": len(open_items)}
+            if with_items:
+                row["unchecked_items"] = [str(i.get("display") or i.get("note") or "").strip() for i in open_items][:200]
+            out.append(row)
+        return out
+
+    def recipes_without_ingredients(self) -> list[dict[str, Any]]:
+        out = []
+        for r in self.all_recipes():
+            slug = r.get("slug")
+            if slug and not self.recipe(slug)["ingredients"]:
+                out.append({"slug": slug, "name": r.get("name")})
+        return out
+
+    def delete_recipe(self, slug: str) -> dict[str, Any]:
+        """Deletes a recipe only if it has no ingredients, so a real recipe can never be removed by mistake."""
+        full = self.recipe(slug)
+        if full["ingredients"]:
+            raise MealieError("This recipe has ingredients, so it was not deleted. Delete it in Mealie yourself if you want it gone.")
+        self._call("DELETE", f"/api/recipes/{full['slug']}")
+        return {"slug": full["slug"], "deleted": True}
 
     def add_recipes_to_list(self, list_id: str, slugs: Mapping[str, float]) -> dict[str, Any]:
         if not re.fullmatch(r"[A-Za-z0-9_-]+", str(list_id)):
@@ -284,9 +311,28 @@ def register(mcp: Any, store: Any, mealie: Mealie, parse_when: Any, read: Any, w
         return guard(lambda: mealie.delete_plan_entry(entry_id))
 
     @mcp.tool(annotations=read)
-    def get_shopping_lists() -> dict[str, Any]:
-        """The user's Mealie shopping lists (id, name, item count)."""
-        return guard(lambda: {"lists": mealie.shopping_lists()})
+    def get_shopping_lists(include_items: bool = False) -> dict[str, Any]:
+        """The user's Mealie shopping lists (id, name, item counts). include_items=true also lists the unchecked items."""
+        return guard(lambda: {"lists": mealie.shopping_lists(include_items)})
+
+    @mcp.tool(annotations=read)
+    def recipes_without_ingredients() -> dict[str, Any]:
+        """Mealie recipes that have no ingredients (usually broken imports). Show them to the user before deleting."""
+        return guard(lambda: {"recipes": mealie.recipes_without_ingredients()})
+
+    @mcp.tool(annotations=delete)
+    def delete_recipes(slugs: list[str]) -> dict[str, Any]:
+        """Delete Mealie recipes that have NO ingredients (up to 20). Recipes with ingredients are refused.
+        Only after the user agreed to the exact list."""
+        if not 0 < len(slugs) <= 20:
+            return {"error": "Send between 1 and 20 slugs."}
+        results = []
+        for s in slugs:
+            try:
+                results.append(mealie.delete_recipe(str(s)))
+            except MealieError as e:
+                results.append({"slug": str(s), "error": str(e)})
+        return {"results": results}
 
     @mcp.tool(annotations=write)
     def add_recipes_to_shopping_list(list_id: str, recipe_slugs: list[str], servings_multiplier: float = 1.0) -> dict[str, Any]:

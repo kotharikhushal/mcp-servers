@@ -30,7 +30,13 @@ def handler(req: httpx.Request) -> httpx.Response:
     if req.method == "DELETE" and req.url.path == "/api/households/mealplans/abc":
         return httpx.Response(200, json={})
     if req.url.path == "/api/households/shopping/lists" and req.method == "GET":
-        return httpx.Response(200, json={"items": [{"id": "L1", "name": "Weekly", "listItems": [1, 2]}]})
+        return httpx.Response(200, json={"items": [{"id": "L1", "name": "Weekly"}]})  # summaries carry no items
+    if req.url.path == "/api/households/shopping/lists/L1" and req.method == "GET":
+        return httpx.Response(200, json={"id": "L1", "name": "Weekly", "listItems": [
+            {"display": "2 onions", "checked": False}, {"note": "salt", "checked": True}]})
+    if req.method == "DELETE" and req.url.path in ("/api/recipes/mystery", "/api/recipes/aloo-gobi"):
+        STATE["deleted_recipe"] = req.url.path
+        return httpx.Response(200, json={})
     if req.url.path == "/api/households/shopping/lists/L1/recipe" and req.method == "POST":
         STATE["list_body"] = _j.loads(req.content)
         return httpx.Response(200, json={})
@@ -185,12 +191,24 @@ def test_set_nutrition_validates_and_reports_a_silent_failure():
 def test_delete_shopping_and_id_checks():
     c = client()
     assert c.delete_plan_entry("abc") == {"deleted": True}
-    assert c.shopping_lists() == [{"id": "L1", "name": "Weekly", "items": 2}]
+    assert c.shopping_lists() == [{"id": "L1", "name": "Weekly", "items": 2, "unchecked": 1}]
+    assert c.shopping_lists(True)[0]["unchecked_items"] == ["2 onions"]
     c.add_recipes_to_list("L1", {"aloo-gobi": 2})
     assert STATE["list_body"] == [{"recipeId": "r1", "recipeIncrementQuantity": 2}]
     for bad in (lambda: c.delete_plan_entry("../x"), lambda: c.add_recipes_to_list("a/b", {"aloo-gobi": 1})):
         with pytest.raises(mealie.MealieError):
             bad()
+
+
+def test_delete_only_recipes_without_ingredients():
+    c = client()
+    assert c.recipes_without_ingredients() == [{"slug": "mystery", "name": "Mystery"}]
+    STATE.pop("deleted_recipe", None)
+    with pytest.raises(mealie.MealieError) as e:
+        c.delete_recipe("aloo-gobi")
+    assert "has ingredients" in str(e.value) and "deleted_recipe" not in STATE
+    assert c.delete_recipe("mystery") == {"slug": "mystery", "deleted": True}
+    assert STATE["deleted_recipe"] == "/api/recipes/mystery"
 
 
 def test_new_tools_through_mcp_with_batch_limits(tmp_path, monkeypatch):
