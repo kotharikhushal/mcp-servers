@@ -96,11 +96,13 @@ A person not listed in `WEB_USERS` is refused even if Authelia lets them sign in
 
 ### Claude connector for two people
 
-By default the Claude connector reads the default person's data for everyone who signs in. To give each person their own data, set `MCP_USERS` to link each `WEB_USERS` name to their Authelia sign-in id (the `sub`, username or email in their token; separate several ids with `|`):
+Every data tool takes an optional `person` (a `WEB_USERS` name such as `shivani`). Leave it empty and you get the default person's data. This is how two people can share one Claude account: whoever is asking has Claude pass their name. It is a convenience, not a security boundary, because anyone with the connector can name anyone.
+
+If people have separate Claude accounts, you can also link each person's Authelia sign-in (the `sub`, username or email in their token; separate several ids with `|`) so the right database is chosen automatically:
 
     MCP_USERS=khushal:khushal@example.com,shivani:shivani@example.com
 
-A person whose sign-in is not listed gets an error that shows the id to add. Phone sync (`/ingest`) still feeds the default person only; other people add data through the app or the Apple Health import.
+A sign-in that is not listed gets an error showing the id to add. Phone sync (`/ingest`) still feeds the default person only; other people add data through the app or the Apple Health import.
 
 **GP report** (`/gp`): a printable home blood pressure record (averages with and without the first day, morning and
 evening averages, highest and lowest, readings by day, completeness, a free-text context note). Use the browser's

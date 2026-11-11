@@ -19,6 +19,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from . import mealie, tools
+from .person import CURRENT, PersonalTools, personal
 from .auth import OIDCVerifier
 from .store import Store
 
@@ -78,10 +79,16 @@ class PersonStore:
     """Stands in for a Store in the MCP tools: each call goes to the database of whoever is signed in.
     With no MCP_USERS set, everyone gets the default person's data (the old behaviour)."""
 
-    def __init__(self, stores, links: dict[str, str]) -> None:
+    def __init__(self, stores, links: dict[str, str], known: set[str] | None = None) -> None:
         self._stores, self._links = stores, links
+        self._known = known or {stores.default_user}
 
     def _person(self) -> str:
+        asked = CURRENT.get()  # the `person` argument of the tool being called
+        if asked:
+            if asked not in self._known:
+                raise PersonRequired(f"Unknown person {asked!r}. Use one of: {', '.join(sorted(self._known))}.")
+            return asked
         if not self._links:
             return self._stores.default_user
         tok = get_access_token()
@@ -123,7 +130,9 @@ def create(env: Mapping[str, str] = os.environ) -> tuple[FastMCP, Store, OIDCVer
         "health",
         instructions=("Personal health data from the user's Pixel Watch, Health Connect and manual logs. "
                       "Start with health_summary. If data looks missing, call data_status. "
-                      "Report data and trends; do not diagnose. If Mealie tools are present, prefer a recipe's own nutrition over estimates."),
+                      "Report data and trends; do not diagnose. If Mealie tools are present, prefer a recipe's own nutrition over estimates. "
+                      "Several people share this connector. Data tools take an optional `person` (for example khushal or shivani); "
+                      "leave it empty only for the default person, and pass it on every call when someone else is asking."),
         host=env.get("HOST", "0.0.0.0"), port=int(env.get("PORT", "8000")),
         log_level="WARNING",  # also silences uvicorn's access log, which would print request URLs
         auth=AuthSettings(issuer_url=issuer, resource_server_url=f"{public_url}/mcp"),
@@ -140,15 +149,18 @@ def create(env: Mapping[str, str] = os.environ) -> tuple[FastMCP, Store, OIDCVer
         if unknown:
             raise ConfigError(f"MCP_USERS names someone who is not in WEB_USERS: {sorted(unknown)}")
     else:
-        log.warning("MCP_USERS is not set: everyone who signs in to the connector sees the default person's data")
-    person_store = PersonStore(stores, links)
-    tools.register(mcp, person_store)  # type: ignore[arg-type]
+        log.info("MCP_USERS is not set: tools use the default person unless the caller passes `person`")
+    from . import web as _web
+    known = set(_web.parse_users(env.get("WEB_USERS") or "default:Default"))
+    person_store = PersonStore(stores, links, known)
+    tools.register(PersonalTools(mcp), person_store)  # type: ignore[arg-type]
     mealie_url, mealie_token = (env.get("MEALIE_URL") or "").strip(), (env.get("MEALIE_API_TOKEN") or "").strip()
     if mealie_url or mealie_token:
         if not (mealie_url and mealie_token) or urlparse(mealie_url).scheme not in ("http", "https") \
                 or not urlparse(mealie_url).netloc:
             raise ConfigError("MEALIE_URL (http or https address) and MEALIE_API_TOKEN must both be set")
-        mealie.register(mcp, person_store, mealie.Mealie(mealie_url, mealie_token), tools._parse_when, tools.READ, tools.WRITE, tools.DELETE)
+        mealie.register(mcp, person_store, mealie.Mealie(mealie_url, mealie_token), tools._parse_when, tools.READ, tools.WRITE, tools.DELETE,
+                       personal)
 
     # A token in the URL ends up in proxy and access logs, so this is off unless asked for.
     allow_query_key = (env.get("ALLOW_QUERY_KEY") or "").lower() in ("1", "true", "yes")

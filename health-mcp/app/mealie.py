@@ -550,7 +550,8 @@ class Mealie:
         return {"id": e.get("id"), "date": e.get("date"), "meal": e.get("entryType")}
 
 
-def register(mcp: Any, store: Any, mealie: Mealie, parse_when: Any, read: Any, write: Any, delete: Any) -> None:
+def register(mcp: Any, store: Any, mealie: Mealie, parse_when: Any, read: Any, write: Any, delete: Any,
+             personal: Any = lambda f: f) -> None:
     """Adds the Mealie tools. Errors become plain messages instead of stack traces."""
     def guard(fn: Any) -> dict[str, Any]:
         try:
@@ -686,6 +687,7 @@ def register(mcp: Any, store: Any, mealie: Mealie, parse_when: Any, read: Any, w
         return log_recipe_nutrition(store, rec, servings, parse_when(store, when))
 
     @mcp.tool(annotations=write)
+    @personal
     def log_recipe_as_meal(slug: str, servings: float = 1.0, when: str | None = None) -> dict[str, Any]:
         """Log what the user ate from a Mealie recipe to the food log, using the recipe's own nutrition
         multiplied by the servings they actually had. If the recipe has no nutrition, nothing is logged:
@@ -693,6 +695,7 @@ def register(mcp: Any, store: Any, mealie: Mealie, parse_when: Any, read: Any, w
         return log_from_recipe(slug, servings, when)
 
     @mcp.tool(annotations=write)
+    @personal
     def log_planned_meal(date_iso: str, meal: str, servings: float = 1.0, when: str | None = None) -> dict[str, Any]:
         """Log a meal from the Mealie meal plan as eaten (looks up the recipe planned for that date and meal).
         Use only when the user says they ate it as planned; `when` is the time they ate it."""
@@ -785,6 +788,7 @@ def register(mcp: Any, store: Any, mealie: Mealie, parse_when: Any, read: Any, w
 
     # ----- meal plan extras -----
     @mcp.tool(annotations=read)
+    @personal
     def get_plan_nutrition(days: int = 7, start: str | None = None) -> dict[str, Any]:
         """The meal plan with calories, protein, carbs, fat, fibre and salt per meal and per day, from each
         recipe's own nutrition (one serving of each planned meal). Fasting days from the health log are marked."""
