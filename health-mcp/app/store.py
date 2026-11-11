@@ -619,26 +619,37 @@ class Store:
                 continue
             kept.append(r)
             spans.append((st, en))
+        by_day: dict[date, list[Any]] = defaultdict(list)
         for r in sorted(kept, key=lambda x: x["end_time"]):
             d = self.day_of(r["end_time"])
-            if d not in out:
-                continue
-            stages = json.loads(r["stages"])
-            tot: dict[str, int] = defaultdict(int)
-            for s in stages:
-                tot[s["stage"]] += s["seconds"]
-            awake = tot.get("awake", 0)
-            asleep = (sum(tot.values()) - awake) if stages else r["duration_seconds"]
-            cur = out[d] or {"sessions": 0, "asleep_seconds": 0, "awake_seconds": 0,
-                             "stages": defaultdict(int)}
-            cur["sessions"] += 1
-            cur["asleep_seconds"] += asleep
-            cur["awake_seconds"] += awake
-            for k, v in tot.items():
-                cur["stages"][k] += v
-            cur["bed"] = self.local_str(r["start_time"]) if "bed" not in cur else cur["bed"]
-            cur["wake"] = self.local_str(r["end_time"])
-            out[d] = cur
+            if d in out:
+                by_day[d].append(r)
+        for d, day_rows in by_day.items():
+            main = max(day_rows, key=lambda x: x["duration_seconds"])
+            for r in day_rows:
+                stages = json.loads(r["stages"])
+                tot: dict[str, int] = defaultdict(int)
+                for s in stages:
+                    tot[s["stage"]] += s["seconds"]
+                awake = tot.get("awake", 0)
+                asleep = (sum(tot.values()) - awake) if stages else r["duration_seconds"]
+                st_local = self.local(parse_ts(r["start_time"]))  # type: ignore[arg-type]
+                is_nap = (r is not main and 9 <= st_local.hour < 20 and r["duration_seconds"] < 3 * 3600)
+                cur = out[d] or {"sessions": 0, "asleep_seconds": 0, "night_seconds": 0, "awake_seconds": 0,
+                                 "nap_seconds": 0, "stages": defaultdict(int)}
+                cur["sessions"] += 1
+                cur["asleep_seconds"] += asleep  # night and naps together, as the coach tools report it
+                if is_nap:
+                    cur["nap_seconds"] += asleep
+                    out[d] = cur
+                    continue
+                cur["night_seconds"] += asleep
+                cur["awake_seconds"] += awake
+                for k, v in tot.items():
+                    cur["stages"][k] += v
+                cur["bed"] = self.local_str(r["start_time"]) if "bed" not in cur else cur["bed"]
+                cur["wake"] = self.local_str(r["end_time"])
+                out[d] = cur
         return out
 
     def weight_readings(self, days: int) -> list[dict[str, Any]]:

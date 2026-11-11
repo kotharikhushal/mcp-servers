@@ -331,7 +331,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             try:
                 v = float(raw)
             except ValueError:
-                return back("Calorie, protein and salt goals must be numbers", True, "/settings")
+                return back("Calorie, protein, salt and weight goals must be numbers", True, "/settings")
             if not lo <= v <= hi:
                 return back(f"{k.replace('_', ' ').capitalize()} must be between {lo} and {hi}", True, "/settings")
             extra[k] = f"{v:g}"
