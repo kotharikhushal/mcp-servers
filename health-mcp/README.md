@@ -109,6 +109,13 @@ steps, sleep with stages, daily heart rate summaries, weight, workouts and calor
 record. Importing an overlapping export again is safe. The export holds daily summaries, so there is no
 minute-by-minute heart rate for Apple data.
 
+## Mealie (optional)
+Set `MEALIE_URL` and `MEALIE_API_TOKEN` in `.env` (token from Mealie, User profile, API tokens) and restart.
+The Health connector then also offers `mealie_status`, `search_recipes`, `get_recipe` (with nutrition per
+serving), `get_meal_plan`, `add_to_meal_plan` and `log_recipe_as_meal` (scales the recipe's own nutrition by
+the servings eaten and writes it to the food log). The token is only sent to `MEALIE_URL` and is never
+returned by a tool. Recipes without nutrition filled in are not logged automatically. Needs Mealie v2 or later.
+
 ## Development
     pip install -r requirements.txt -r requirements-dev.txt
     pytest tests && python tests/e2e.py

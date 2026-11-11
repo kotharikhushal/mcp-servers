@@ -17,7 +17,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from . import tools
+from . import mealie, tools
 from .auth import OIDCVerifier
 from .store import Store
 
@@ -66,7 +66,7 @@ def create(env: Mapping[str, str] = os.environ) -> tuple[FastMCP, Store, OIDCVer
         "health",
         instructions=("Personal health data from the user's Pixel Watch, Health Connect and manual logs. "
                       "Start with health_summary. If data looks missing, call data_status. "
-                      "Report data and trends; do not diagnose."),
+                      "Report data and trends; do not diagnose. If Mealie tools are present, prefer a recipe's own nutrition over estimates."),
         host=env.get("HOST", "0.0.0.0"), port=int(env.get("PORT", "8000")),
         log_level="WARNING",  # also silences uvicorn's access log, which would print request URLs
         auth=AuthSettings(issuer_url=issuer, resource_server_url=f"{public_url}/mcp"),
@@ -77,6 +77,12 @@ def create(env: Mapping[str, str] = os.environ) -> tuple[FastMCP, Store, OIDCVer
             allowed_origins=[origin, "https://claude.ai", "https://claude.com"]),
     )
     tools.register(mcp, store)
+    mealie_url, mealie_token = (env.get("MEALIE_URL") or "").strip(), (env.get("MEALIE_API_TOKEN") or "").strip()
+    if mealie_url or mealie_token:
+        if not (mealie_url and mealie_token) or urlparse(mealie_url).scheme not in ("http", "https") \
+                or not urlparse(mealie_url).netloc:
+            raise ConfigError("MEALIE_URL (http or https address) and MEALIE_API_TOKEN must both be set")
+        mealie.register(mcp, store, mealie.Mealie(mealie_url, mealie_token), tools._parse_when, tools.READ, tools.WRITE)
 
     # A token in the URL ends up in proxy and access logs, so this is off unless asked for.
     allow_query_key = (env.get("ALLOW_QUERY_KEY") or "").lower() in ("1", "true", "yes")
