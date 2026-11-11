@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from typing import Any, Sequence
 
 from . import charts
-from .pages import BP_URGENT, HOME_BP_HIGH, goals, notes_for
+from .pages import BP_URGENT, HOME_BP_HIGH, goals, notes_for, nutrition_goals
 from .store import Store
 from .tools import bp_stats
 from .ui import chips, esc, icon, legend, stats, tile
@@ -169,9 +169,11 @@ def today_page(store: Store, name: str) -> str:
             kcal_by[e["_day"]] += e["kcal"]
     fasting = today in store.fasting_days(1)
     today_food = [e for e in food if e["_day"] == today]
+    kg = nutrition_goals(store)["kcal_goal"]
+    left = f'{abs(kg - kcal_by[today]):,.0f} kcal {"left" if kg >= kcal_by[today] else "over"}' if kg and today_food else None
     tiles.append(tile("/food", "Food", "food", "--c-food", f'{kcal_by[today]:,}' if (today_food or fasting) else "–",
                       "kcal" if today_food else "",
-                      "Fasting day" if fasting else (f'{len(today_food)} entries today' if today_food else "Nothing logged today"),
+                      "Fasting day" if fasting else (left or (f'{len(today_food)} entries today' if today_food else "Nothing logged today")),
                       charts.spark([float(v) if v else None for v in kcal_by.values()], "--c-food")))
 
     wk = store.workouts(7)
@@ -393,7 +395,17 @@ def food_page(store: Store, csrf: str, d: int) -> str:
                         label_every=every, faded=[x in fasting for x in dates],
                         summary=f"Calories logged per day over {d} days")
     avg = _avg([by[x] for x in logged]) or 0
+    ng = nutrition_goals(store)
     notes = []
+    today_k = by.get(today, 0)
+    if ng["kcal_goal"] and today not in fasting:
+        gap = ng["kcal_goal"] - today_k
+        notes.append(("", f'Calories today: {today_k:,.0f} of {ng["kcal_goal"]:,.0f} kcal, '
+                          f'{abs(gap):,.0f} {"left" if gap >= 0 else "over"}.'))
+    if ng["protein_goal"]:
+        notes.append(("", f'Protein today: {prot.get(today, 0):.0f} of {ng["protein_goal"]:.0f} g.'))
+    if ng["salt_limit"]:
+        notes.append(("", f'Salt today: {salt.get(today, 0):.1f} g (your limit is {ng["salt_limit"]:g} g).'))
     if fasting:
         notes.append(("", f'{len(fasting)} fasting day{"s" if len(fasting) != 1 else ""} marked in this period.'))
     saltavg = _avg([salt[x] for x in logged if x in salt])
@@ -402,9 +414,14 @@ def food_page(store: Store, csrf: str, d: int) -> str:
     notes.append(("", "Days with nothing logged are left out of the averages."))
     rows = [(_when(store, e["time"]), e["name"], f'{e["kcal"]} kcal',
              _delete(csrf, "nutrition", e["id"]) if e["source"] == "manual" else "") for e in reversed(es[-20:])]
-    today_k = by.get(today, 0)
+    if today in fasting:
+        delta = "Fasting day"
+    elif ng["kcal_goal"]:
+        delta = f'Goal {ng["kcal_goal"]:,.0f} kcal · average {avg:,.0f}'
+    else:
+        delta = f"Daily average {avg:,.0f} kcal"
     return (head + f'<div class="hero1">{today_k:,}<small>kcal today</small></div>'
-            f'<div class="delta">{"Fasting day" if today in fasting else f"Daily average {avg:,.0f} kcal"}</div>'
+            f'<div class="delta">{delta}</div>'
             + chips("/food", d) + f'<div class="card">{chart}</div>'
             + stats([("Average", f"{avg:,.0f}"), ("Protein", f"{_avg([prot[x] for x in logged if x in prot]) or 0:.0f} g"),
                      ("Entries", str(len(es)))])

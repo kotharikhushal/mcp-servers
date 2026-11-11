@@ -17,6 +17,20 @@ HOME_BP_HIGH = (135, 85)       # NHS home-reading threshold
 BP_URGENT = (180, 120)
 
 
+NUTRITION_GOALS = {"kcal_goal": (1000, 4000), "protein_goal": (20, 300), "salt_limit": (1, 12)}
+
+
+def nutrition_goals(store: Store) -> dict[str, float | None]:
+    """Optional daily calorie and protein targets and a salt limit; None when not set."""
+    out: dict[str, float | None] = {}
+    for k in NUTRITION_GOALS:
+        try:
+            out[k] = float(store.get_setting(k) or "") or None
+        except ValueError:
+            out[k] = None
+    return out
+
+
 def goals(store: Store) -> dict[str, float]:
     out: dict[str, float] = {}
     for k, default in DEFAULT_GOALS.items():
@@ -191,6 +205,10 @@ def settings_page(store: Store, csrf: str, ntfy_base: str) -> str:
     pm = store.get_setting("reminder_evening") or "21:00"
     ctx = store.get_setting("gp_context") or ""
     g = goals(store)
+    ng = nutrition_goals(store)
+
+    def nv(k: str) -> str:
+        return f"{ng[k]:g}" if ng[k] else ""
     sub = (f'<p class="m">On your phone, install the free <b>ntfy</b> app and subscribe to this topic: '
            f'<b>{esc(topic)}</b> (server {esc(ntfy_base)}). Anyone who knows the topic name can read the '
            f'reminders, so the messages never include health data.</p>' if topic else
@@ -202,6 +220,12 @@ def settings_page(store: Store, csrf: str, ntfy_base: str) -> str:
         f'<input name="steps_goal" type="number" inputmode="numeric" min="1000" max="50000" step="100" value="{g["steps_goal"]:.0f}" required></div>'
         '<div><label>Sleep (hours)</label>'
         f'<input name="sleep_goal" type="number" inputmode="decimal" min="4" max="12" step="0.25" value="{g["sleep_goal"]:g}" required></div></div>'
+        '<div class="row" style="grid-template-columns:1fr 1fr 1fr"><div><label>Calories</label>'
+        f'<input name="kcal_goal" type="number" inputmode="numeric" min="1000" max="4000" step="50" value="{nv("kcal_goal")}" placeholder="optional"></div>'
+        '<div><label>Protein (g)</label>'
+        f'<input name="protein_goal" type="number" inputmode="numeric" min="20" max="300" step="5" value="{nv("protein_goal")}" placeholder="optional"></div>'
+        '<div><label>Salt max (g)</label>'
+        f'<input name="salt_limit" type="number" inputmode="decimal" min="1" max="12" step="0.5" value="{nv("salt_limit")}" placeholder="optional"></div></div>'
         '<button class="go">Save goals</button></form></div>'
         f'<div class="card"><h2>Blood pressure reminders</h2><form method="post" action="/settings/reminders">{tok}'
         f'<label><input type="checkbox" name="enabled" value="1" style="width:auto"{" checked" if on else ""}> '
