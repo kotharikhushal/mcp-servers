@@ -1,5 +1,5 @@
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -217,3 +217,104 @@ def test_today_page_renders_with_real_data(env):
     assert "3456" in body and "76.1 kg" in body and "185/125" in body and "NHS 111" in body
     assert "under 6 hours" in body or "Last night" in body
     assert "Week summary" in c.get("/bp").text
+
+
+# ---------------------------------------------------------------- GP report, settings, reminders, import
+def _log_week(store):
+    base = store.now().replace(hour=8, minute=0, second=0, microsecond=0)
+    for back, am, pm in ((5, (150, 100), (148, 98)), (4, (146, 96), (144, 95)), (3, (140, 92), (142, 94))):
+        day = base - timedelta(days=back)
+        for hour, minute, (sys_, dia), pulse in ((8, 0, am, 70), (8, 2, (am[0] + 1, am[1] + 1), 71),
+                                                  (20, 0, pm, 68), (20, 2, (pm[0] + 1, pm[1] + 1), 69)):
+            store.log_blood_pressure(sys_, dia, pulse, day.replace(hour=hour, minute=minute), "after medication")
+
+
+def test_gp_report_has_summary_context_and_escapes(env):
+    c, stores, _ = env
+    s = stores.get("khushal")
+    _log_week(s)
+    signed_in(c)
+    c.post("/settings/context", data={"context": "Losartan 25mg nightly <b>from 10 Nov</b>", "csrf": "tok"})
+    body = c.get("/gp?days=28").text
+    assert "Home blood pressure record" in body and "Khushal" in body
+    assert "&lt;b&gt;from 10 Nov&lt;/b&gt;" in body and "<b>from 10 Nov</b>" not in body
+    assert "Highest" in body and "Excluding the first day" in body
+    assert "no diagnosis" not in body and "not a diagnosis" in body
+
+
+def test_gp_report_empty_period_and_bad_days(env):
+    c, _, _ = env
+    signed_in(c)
+    assert "No readings in this period" in c.get("/gp?days=banana").text
+
+
+def test_gp_report_is_per_person(env):
+    c, stores, _ = env
+    stores.get("khushal").log_blood_pressure(151, 101, 70, None, None)
+    signed_in(c, "shivani")
+    assert "151/101" not in c.get("/gp").text
+
+
+def test_reminder_settings_validation_topic_and_test_send(env):
+    c, stores, _ = env
+    s = stores.get("khushal")
+    signed_in(c)
+    r = c.post("/settings/reminders", data={"enabled": "1", "morning": "25:00", "evening": "21:00", "csrf": "tok"})
+    assert "err=" in r.headers["location"] and s.get_setting("reminders_enabled") is None
+    r = c.post("/settings/reminders", data={"enabled": "1", "morning": "07:30", "evening": "20:45", "csrf": "tok"})
+    assert "ok=" in r.headers["location"]
+    assert s.get_setting("reminders_enabled") == "1" and s.get_setting("reminder_morning") == "07:30"
+    topic = s.get_setting("reminder_topic")
+    assert topic.startswith("wellness-")
+    assert topic in c.get("/settings").text
+    # saving again keeps the same topic
+    c.post("/settings/reminders", data={"enabled": "1", "morning": "07:30", "evening": "20:45", "csrf": "tok"})
+    assert s.get_setting("reminder_topic") == topic
+    # people have separate topics
+    c.cookies.clear()
+    signed_in(c, "shivani")
+    c.post("/settings/reminders", data={"enabled": "1", "morning": "08:00", "evening": "21:00", "csrf": "tok"})
+    assert stores.get("shivani").get_setting("reminder_topic") != topic
+
+
+def test_test_reminder_uses_the_notifier(tmp_path):
+    sent = []
+    ver = FakeVerifier()
+    stores = web.Stores(str(tmp_path), "khushal", "Europe/London")
+    app = web.create_app(ENV, stores, USERS, ver, notify=lambda t, ti, m: sent.append((t, m)))
+    c = TestClient(app, base_url=BASE, follow_redirects=False)
+    signed_in(c)
+    assert "err=" in c.post("/settings/test", data={"csrf": "tok"}).headers["location"]
+    c.post("/settings/reminders", data={"enabled": "1", "morning": "08:00", "evening": "21:00", "csrf": "tok"})
+    r = c.post("/settings/test", data={"csrf": "tok"})
+    assert "ok=" in r.headers["location"] and sent and sent[0][0].startswith("wellness-")
+
+
+def test_apple_import_via_upload_goes_to_the_signed_in_persons_database(env):
+    import json
+    from tests.test_apple import EXPORT
+    c, stores, _ = env
+    signed_in(c, "shivani")
+    files = {"file": ("export.json", json.dumps(EXPORT).encode(), "application/json")}
+    r = c.post("/import", data={"csrf": "tok"}, files=files)
+    assert r.status_code == 303 and "ok=" in r.headers["location"] and "nights" in r.headers["location"].replace("+", " ")
+    assert stores.get("shivani").status()["tables"]["sleep"]["rows"] == 1
+    assert stores.get("khushal").status()["tables"]["sleep"]["rows"] == 0
+
+
+def test_apple_import_rejects_bad_file_missing_file_and_missing_csrf(env):
+    c, _, _ = env
+    signed_in(c)
+    r = c.post("/import", data={"csrf": "tok"}, files={"file": ("x.json", b"nope", "application/json")})
+    assert "err=" in r.headers["location"]
+    assert "err=" in c.post("/import", data={"csrf": "tok"}).headers["location"]
+    r = c.post("/import", data={}, files={"file": ("x.json", b"{}", "application/json")})
+    assert r.status_code == 403
+
+
+def test_new_pages_need_sign_in(env):
+    c, _, _ = env
+    for path in ("/gp", "/settings", "/import"):
+        assert c.get(path).status_code == 303
+    for path in ("/settings/reminders", "/settings/test", "/settings/context", "/import"):
+        assert c.post(path, data={}).status_code == 401

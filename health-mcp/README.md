@@ -89,6 +89,21 @@ Pangolin: a second public resource `wellness.example.com` to `http://<unraid-ip>
 ```
 A person not listed in `WEB_USERS` is refused even if Authelia lets them sign in.
 
+**GP report** (`/gp`): a printable home blood pressure record (averages with and without the first day, morning and
+evening averages, highest and lowest, readings by day, completeness, a free-text context note). Use the browser's
+Print or Save as PDF.
+
+**Reminders** (Settings): morning and evening blood pressure reminders as push notifications through
+[ntfy](https://ntfy.sh). Each person gets a private random topic and subscribes to it in the ntfy phone app. A
+reminder is sent once per slot per day, only within three hours after its time, and is skipped when a reading has
+already been logged in that half of the day. Messages never contain health data. Set `NTFY_BASE` in `.env` to use
+your own ntfy server (default `https://ntfy.sh`).
+
+**Apple Health import** (Settings, Import a file): upload the .zip or .json made by the Health Auto Export app. It adds
+steps, sleep with stages, daily heart rate summaries, weight, workouts and calories to the signed-in person's own
+record. Importing an overlapping export again is safe. The export holds daily summaries, so there is no
+minute-by-minute heart rate for Apple data.
+
 ## Development
     pip install -r requirements.txt -r requirements-dev.txt
     pytest tests && python tests/e2e.py

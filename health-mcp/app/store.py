@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS total_calories(
   id INTEGER PRIMARY KEY, start_time TEXT NOT NULL, end_time TEXT NOT NULL, kcal REAL NOT NULL,
   UNIQUE(start_time, end_time, kcal));
 CREATE TABLE IF NOT EXISTS fasting(day TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS daily_heart(
+  day TEXT PRIMARY KEY, min REAL, avg REAL, max REAL, resting REAL, hrv REAL);
 CREATE TABLE IF NOT EXISTS sync_log(
   id INTEGER PRIMARY KEY, received_at TEXT NOT NULL, app_version TEXT, counts TEXT NOT NULL);
 """
@@ -428,6 +431,33 @@ class Store:
             rid = cur.lastrowid
         return {"id": rid, "time": self.local_str(ts), "kg": round(kg, 2)}
 
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        rows = self._rows("SELECT value FROM settings WHERE key=?", (key,))
+        return rows[0]["value"] if rows else default
+
+    def set_setting(self, key: str, value: str | None) -> None:
+        with self._lock, self._conn:
+            if value is None:
+                self._conn.execute("DELETE FROM settings WHERE key=?", (key,))
+            else:
+                self._conn.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+
+    def import_daily_heart(self, rows: list[dict[str, Any]]) -> int:
+        """Daily heart summaries from sources that do not give individual samples (Apple Health export)."""
+        n = 0
+        with self._lock, self._conn:
+            for r in rows:
+                vals = [_num(r.get(k), 0, 300) for k in ("min", "avg", "max", "resting", "hrv")]
+                if not r.get("day") or all(v is None for v in vals):
+                    continue
+                self._conn.execute(
+                    "INSERT INTO daily_heart(day,min,avg,max,resting,hrv) VALUES(?,?,?,?,?,?) "
+                    "ON CONFLICT(day) DO UPDATE SET min=excluded.min, avg=excluded.avg, max=excluded.max, "
+                    "resting=excluded.resting, hrv=excluded.hrv", (str(r["day"]), *vals))
+                n += 1
+        return n
+
     def set_fasting(self, day: date, fasting: bool) -> None:
         with self._lock, self._conn:
             if fasting:
@@ -563,6 +593,12 @@ class Store:
                 continue
             out[d] = {"samples": len(v), "min": v[0], "avg": round(sum(v) / len(v), 1),
                       "max": v[-1], "p10": v[int(0.1 * (len(v) - 1))]}
+        # days with no samples may still have a daily summary (Apple Health import)
+        for r in self._rows("SELECT * FROM daily_heart WHERE day>=?", (dates[0].isoformat(),)):
+            d = date.fromisoformat(r["day"])
+            if d in out and not out[d]:
+                out[d] = {"samples": 0, "min": r["min"], "avg": r["avg"], "max": r["max"],
+                          "resting": r["resting"], "hrv": r["hrv"]}
         return out
 
     def sleep_by_day(self, days: int) -> dict[date, dict[str, Any]]:
