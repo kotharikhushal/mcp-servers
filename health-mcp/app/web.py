@@ -245,7 +245,8 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         except Exception:
             log.exception("OIDC discovery failed")
             return headers(HTMLResponse(pages.login_page("Sign-in is unavailable right now."), status_code=502))
-        state, nonce, verifier_code = (secrets.token_urlsafe(24) for _ in range(3))
+        state, nonce = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
+        verifier_code = secrets.token_urlsafe(48)  # 64 chars; RFC 7636 requires 43 to 128
         challenge = _b64(hashlib.sha256(verifier_code.encode()).digest())
         url = disc["authorization_endpoint"] + "?" + urlencode({
             "response_type": "code", "client_id": client_id, "redirect_uri": redirect_uri,
@@ -268,6 +269,8 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             r = await client.post(disc["token_endpoint"], data={
                 "grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
                 "client_id": client_id, "client_secret": client_secret, "code_verifier": pending["v"]})
+            if r.status_code >= 400:
+                log.error("token endpoint refused the code: %s %s", r.status_code, r.text[:300])
             r.raise_for_status()
             tokens = r.json()
             claims = await verifier.claims_from_jwt(tokens.get("id_token", ""))

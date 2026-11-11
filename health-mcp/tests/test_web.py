@@ -147,6 +147,8 @@ def _login_flow(c, ver, username, nonce_override=None):
     assert r.status_code == 303
     q = parse_qs(urlparse(r.headers["location"]).query)
     assert q["code_challenge_method"] == ["S256"] and q["client_id"] == ["wellness-web"]
+    sent = web.Signer(ENV["WEB_SESSION_SECRET"]).loads(c.cookies.get(web.LOGIN_COOKIE))
+    assert 43 <= len(sent["v"]) <= 128  # RFC 7636 code_verifier length
     ver.claims = {"preferred_username": username, "nonce": nonce_override or q["nonce"][0]}
     return c.get("/callback", params={"code": "abc", "state": q["state"][0]})
 
