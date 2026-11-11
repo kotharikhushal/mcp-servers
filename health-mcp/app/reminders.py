@@ -80,8 +80,8 @@ def run_once(stores: dict[str, Store], notify: Notifier, attempts: dict[tuple[st
     sent = 0
     for user, store in stores.items():
         for slot in due_slots(store, now):
-            last = attempts.get((user, slot), 0.0)
-            if time.monotonic() - last < RETRY_SECONDS:
+            last = attempts.get((user, slot))
+            if last is not None and time.monotonic() - last < RETRY_SECONDS:
                 continue
             attempts[(user, slot)] = time.monotonic()
             try:

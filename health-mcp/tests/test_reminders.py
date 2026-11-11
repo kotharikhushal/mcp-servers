@@ -72,3 +72,11 @@ def test_run_once_sends_once_and_retries_after_failure():
 def test_new_topic_is_unguessable_and_url_safe():
     a, b = reminders.new_topic(), reminders.new_topic()
     assert a != b and a.startswith("wellness-") and len(a) > 20
+
+
+def test_first_attempt_is_not_throttled_even_just_after_boot(monkeypatch):
+    # time.monotonic() counts from boot, so it can be tiny on a freshly started host
+    monkeypatch.setattr(reminders.time, "monotonic", lambda: 12.0)
+    s = make(at(8, 5))
+    sent = []
+    assert reminders.run_once({"u": s}, lambda t, ti, m: sent.append(m), {}, at(8, 5)) == 1
