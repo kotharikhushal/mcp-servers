@@ -129,7 +129,7 @@ def test_meal_fasting_and_delete(env):
     assert meal["name"] == "Bhurji" and meal["salt_g"] == 1.2
     c.post("/log/fasting", data={"on": "1", "csrf": "tok"})
     assert stores.get("khushal").fasting_days(1)
-    assert "Fasting day" in c.get("/").text
+    assert "Fasting day" in c.get("/").text and "Fasting day" in c.get("/food").text
     c.post("/log/delete", data={"kind": "nutrition", "id": str(meal["id"]), "csrf": "tok"})
     assert stores.get("khushal").food_entries(1) == []
 
@@ -214,9 +214,76 @@ def test_today_page_renders_with_real_data(env):
     s.log_meal("Tea", 40, None, None, None, None, None, None, None)
     signed_in(c)
     body = c.get("/").text
-    assert "3456" in body and "76.1 kg" in body and "185/125" in body and "NHS 111" in body
+    assert "3,456" in body and "76.1" in body and "185/125" in body and "NHS 111" in body
     assert "under 6 hours" in body or "Last night" in body
     assert "Week summary" in c.get("/bp").text
+
+
+def test_every_detail_page_renders_for_every_range_with_and_without_data(env):
+    c, stores, _ = env
+    signed_in(c)
+    paths = ["/sleep", "/steps", "/heart", "/bp", "/weight", "/food", "/activity"]
+    for path in paths:                                   # empty database
+        for d in (7, 30, 90):
+            r = c.get(f"{path}?d={d}")
+            assert r.status_code == 200 and "Khushal" in r.text, path
+    s = stores.get("khushal")
+    now = s.now()
+    s.log_blood_pressure(150, 95, 70, None, None)
+    s.log_weight(80.2, None)
+    s.log_meal("Toast", 200, 6, None, None, None, None, 0.5, None)
+    s.ingest({"steps": [{"start_time": (now - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                         "end_time": (now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ"), "count": 900}],
+              "heart_rate": [{"time": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "bpm": 72}],
+              "sleep": [{"session_end_time": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "duration_seconds": 7 * 3600,
+                         "stages": [{"stage": 5, "duration_seconds": 5000}, {"stage": 6, "duration_seconds": 6000},
+                                    {"stage": 4, "duration_seconds": 14000}]}],
+              "exercise": [{"start_time": (now - timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "end_time": (now - timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ"), "type": 79}]})
+    for path in paths:
+        for d in (7, 30, 90):
+            assert c.get(f"{path}?d={d}").status_code == 200, (path, d)
+    assert "150/95" in c.get("/bp").text and "80.2" in c.get("/weight").text and "Toast" in c.get("/food").text
+    assert c.get("/steps?d=banana").status_code == 200 and c.get("/sleep?d=9999").status_code == 200
+
+
+def test_detail_pages_are_per_person_and_need_sign_in(env):
+    c, stores, _ = env
+    for path in ("/sleep", "/steps", "/heart", "/bp", "/weight", "/food", "/activity"):
+        assert c.get(path).status_code == 303
+    stores.get("khushal").log_weight(81.3, None)
+    signed_in(c, "shivani")
+    assert "81.3" not in c.get("/weight").text and "81.3" not in c.get("/").text
+
+
+def test_goals_are_validated_saved_and_used(env):
+    c, stores, _ = env
+    signed_in(c)
+    assert "err=" in c.post("/settings/goals", data={"csrf": "tok", "steps_goal": "5", "sleep_goal": "7"}).headers["location"]
+    assert "err=" in c.post("/settings/goals", data={"csrf": "tok", "steps_goal": "abc", "sleep_goal": "7"}).headers["location"]
+    r = c.post("/settings/goals", data={"csrf": "tok", "steps_goal": "10000", "sleep_goal": "8"})
+    assert "ok=" in r.headers["location"] and stores.get("khushal").get_setting("steps_goal") == "10000"
+    assert "of 10,000" in c.get("/").text and "of 8 h" in c.get("/").text
+    assert stores.get("shivani").get_setting("steps_goal") is None
+
+
+def test_phone_install_files_are_public_and_the_csp_allows_the_manifest(env):
+    c, _, _ = env
+    m = c.get("/manifest.webmanifest")
+    assert m.status_code == 200 and m.json()["display"] == "standalone"
+    for icon in ("/icon-192.png", "/icon-512.png", "/icon-maskable-512.png", "/apple-touch-icon.png"):
+        r = c.get(icon)
+        assert r.status_code == 200 and r.content[:4] == b"\x89PNG"
+    signed_in(c)
+    page = c.get("/")
+    assert "manifest-src 'self'" in page.headers["content-security-policy"]
+    assert 'rel="manifest"' in page.text and "viewport-fit=cover" in page.text
+
+
+def test_sign_out_lives_in_settings(env):
+    c, _, _ = env
+    signed_in(c)
+    assert 'action="/logout"' in c.get("/settings").text
 
 
 # ---------------------------------------------------------------- GP report, settings, reminders, import

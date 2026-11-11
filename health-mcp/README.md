@@ -60,6 +60,11 @@ Each sync logs the types it contained, plus any top-level key the server does no
 A small web app for blood pressure, a daily coach page and quick logging, for one or more people. Each person
 gets their own database, and signs in with their own Authelia account. It stays off until `WEB_PUBLIC_URL` is set.
 
+The app is built for phones. Today shows rings for steps and sleep against your goals, coach notes and tiles
+for heart rate, blood pressure, weight, food and workouts. Tap a tile for a detail page with a 7, 30 or 90 day
+chart, stats, notes and the entries behind them. Goals are set under Settings. To install it, open the site in
+Chrome on Android (menu, Add to home screen / Install app) or in Safari on iPhone (Share, Add to Home Screen).
+
 Add to `.env`:
 
     WEB_PUBLIC_URL=https://wellness.example.com

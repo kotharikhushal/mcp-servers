@@ -26,7 +26,9 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from . import apple, pages, reminders
+from pathlib import Path
+
+from . import apple, pages, reminders, views
 from .auth import OIDCVerifier
 from .store import Store
 from .tools import _parse_when
@@ -37,8 +39,16 @@ SESSION_COOKIE = "wellness_session"
 LOGIN_COOKIE = "wellness_login"
 SESSION_SECONDS = 7 * 86400
 LOGIN_SECONDS = 600
-CSP = ("default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; "
+CSP = ("default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; manifest-src 'self'; "
        "form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+STATIC = Path(__file__).parent / "static"
+MANIFEST = {"name": "Wellness", "short_name": "Wellness", "start_url": "/", "scope": "/", "display": "standalone",
+            "background_color": "#F1F5F8", "theme_color": "#0B7A75", "description": "Your health at a glance",
+            "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+                      {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+                      {"src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]}
+PUBLIC_ICONS = {"/icon-192.png": "icon-192.png", "/icon-512.png": "icon-512.png",
+                "/icon-maskable-512.png": "icon-maskable-512.png", "/apple-touch-icon.png": "apple-touch-icon.png"}
 
 
 class WebConfigError(RuntimeError):
@@ -182,16 +192,25 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             return headers(await handler(request, s, stores.get(s["u"])))
         return wrapper
 
-    def page(title: str, body: str, s: dict[str, Any], active: str, request: Request) -> HTMLResponse:
+    def page(title: str, body: str, s: dict[str, Any], active: str, request: Request,
+             back: tuple[str, str] | None = None, tint: str | None = None) -> HTMLResponse:
         flash = request.query_params.get("ok") or request.query_params.get("err") or ""
         return HTMLResponse(pages.layout(title, body, name=users[s["u"]], active=active, csrf=s["csrf"],
-                                         flash=flash[:200], flash_err=bool(request.query_params.get("err"))))
+                                         flash=flash[:200], flash_err=bool(request.query_params.get("err")),
+                                         back=back, tint=tint))
 
     async def today(request: Request, s: dict[str, Any], store: Store) -> Response:
-        return page("Today", pages.today_page(store), s, "/", request)
+        return page("Today", views.today_page(store, users[s["u"]]), s, "/", request)
 
-    async def bp(request: Request, s: dict[str, Any], store: Store) -> Response:
-        return page("Blood pressure", pages.bp_page(store, s["csrf"]), s, "/bp", request)
+    def detail(title: str, path: str, tint: str, render: Callable[[Store, str, int], str], default: int = 7):
+        async def handler(request: Request, s: dict[str, Any], store: Store) -> Response:
+            try:
+                d = int(request.query_params.get("d", default))
+            except ValueError:
+                d = default
+            d = d if d in views.RANGES else default
+            return page(title, render(store, s["csrf"], d), s, "/", request, back=("/", "Today"), tint=tint)
+        return handler
 
     async def log_get(request: Request, s: dict[str, Any], store: Store) -> Response:
         return page("Quick log", pages.log_page(store, s["csrf"]), s, "/log", request)
@@ -244,7 +263,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             ok = store.delete_manual(str(f.get("kind", "")), int(str(f.get("id", ""))))
         except ValueError as e:
             return back(f"Could not delete: {e}", True)
-        return RedirectResponse(("/bp" if f.get("kind") == "blood_pressure" else "/log") +
+        return RedirectResponse({"blood_pressure": "/bp", "weight": "/weight", "nutrition": "/food"}.get(str(f.get("kind")), "/log") +
                                 "?" + urlencode({"ok": "Deleted"} if ok else {"err": "Nothing deleted"}),
                                 status_code=303)
 
@@ -294,6 +313,28 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         text = str(request.state.form.get("context", "")).strip()[:600]
         store.set_setting("gp_context", text or None)
         return back("Note saved", False, "/settings")
+
+    async def settings_goals(request: Request, s: dict[str, Any], store: Store) -> Response:
+        f = request.state.form
+        try:
+            steps, sleep = int(str(f.get("steps_goal", "")).strip()), float(str(f.get("sleep_goal", "")).strip())
+        except ValueError:
+            return back("Goals must be numbers", True, "/settings")
+        if not (1000 <= steps <= 50000) or not (4 <= sleep <= 12):
+            return back("Steps must be 1,000 to 50,000 and sleep 4 to 12 hours", True, "/settings")
+        store.set_setting("steps_goal", str(steps))
+        store.set_setting("sleep_goal", f"{sleep:g}")
+        return back("Goals saved", False, "/settings")
+
+    async def public_file(request: Request) -> Response:
+        if request.url.path == "/manifest.webmanifest":
+            resp = JSONResponse(MANIFEST, media_type="application/manifest+json")
+        else:
+            f = STATIC / PUBLIC_ICONS[request.url.path]
+            resp = Response(f.read_bytes(), media_type="image/png")
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        return resp
 
     async def import_get(request: Request, s: dict[str, Any], store: Store) -> Response:
         return page("Import", pages.import_page(store, s["csrf"]), s, "/settings", request)
@@ -387,7 +428,16 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         return JSONResponse({"ok": True})
 
     return Starlette(routes=[
-        Route("/", authed(today)), Route("/bp", authed(bp)), Route("/log", authed(log_get)),
+        Route("/", authed(today)), Route("/log", authed(log_get)),
+        Route("/sleep", authed(detail("Sleep", "/sleep", "--c-sleep", lambda st, c, d: views.sleep_page(st, d)))),
+        Route("/steps", authed(detail("Steps", "/steps", "--c-steps", lambda st, c, d: views.steps_page(st, d)))),
+        Route("/heart", authed(detail("Heart rate", "/heart", "--c-heart", lambda st, c, d: views.heart_page(st, d)))),
+        Route("/bp", authed(detail("Blood pressure", "/bp", "--c-heart", views.bp_page))),
+        Route("/weight", authed(detail("Weight", "/weight", "--c-weight", views.weight_page, 30))),
+        Route("/food", authed(detail("Food", "/food", "--c-food", views.food_page))),
+        Route("/activity", authed(detail("Workouts", "/activity", "--c-work", lambda st, c, d: views.activity_page(st, d)))),
+        Route("/manifest.webmanifest", public_file), *[Route(p_, public_file) for p_ in PUBLIC_ICONS],
+        Route("/settings/goals", authed(settings_goals, post=True), methods=["POST"]),
         Route("/gp", authed(gp)), Route("/settings", authed(settings_get)), Route("/import", authed(import_get)),
         Route("/settings/reminders", authed(settings_reminders, post=True), methods=["POST"]),
         Route("/settings/test", authed(settings_test, post=True), methods=["POST"]),
