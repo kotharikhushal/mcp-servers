@@ -40,7 +40,8 @@ input{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;back
 .row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
 button.go{margin-top:12px;padding:10px 18px;border:0;border-radius:10px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
 button.link{border:0;background:none;color:var(--bad);cursor:pointer;font:inherit;padding:0}
-.flash{padding:8px 12px;border-radius:8px;background:var(--soft);margin-bottom:12px}.flash.err{background:#fbe3e0;color:#7a1d16}
+.flash{padding:12px 14px;border-radius:10px;background:var(--soft);border:2px solid var(--accent);font-weight:600;margin-bottom:14px}
+.flash.err{background:#fbe3e0;color:#7a1d16;border-color:#a82020}
 svg{width:100%;height:auto}main a{color:var(--accent)}
 @media print{nav,.noprint{display:none}body{background:#fff;color:#000}.card{border:1px solid #999}}
 """
@@ -52,7 +53,8 @@ NAV = (("/", "Today"), ("/bp", "Blood pressure"), ("/log", "Quick log"), ("/gp",
 def layout(title: str, body: str, *, name: str, active: str, csrf: str, flash: str = "",
            flash_err: bool = False) -> str:
     links = "".join(f'<a href="{h}"{" class=on" if h == active else ""}>{esc(t)}</a>' for h, t in NAV)
-    fl = f'<div class="flash{" err" if flash_err else ""}">{esc(flash)}</div>' if flash else ""
+    fl = (f'<div class="flash{" err" if flash_err else ""}" role="status">'
+          f'{"Problem: " if flash_err else "Done: "}{esc(flash)}</div>' if flash else "")
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{esc(title)} · Wellness</title><style>{CSS}</style></head><body>'
@@ -306,6 +308,11 @@ def gp_page(store: Store, name: str, days: int) -> str:
     return head + ctx + summary + table + lifestyle + foot
 
 
+def _last_import(store: Store) -> str:
+    v = store.get_setting("last_import")
+    return f'<p><b>Last import:</b> {esc(v)}</p>' if v else '<p class="m">Nothing imported yet.</p>'
+
+
 def settings_page(store: Store, csrf: str, ntfy_base: str) -> str:
     tok = f'<input type="hidden" name="csrf" value="{esc(csrf)}">'
     on = store.get_setting("reminders_enabled") == "1"
@@ -334,15 +341,17 @@ def settings_page(store: Store, csrf: str, ntfy_base: str) -> str:
         '<button class="go">Save note</button></form></div>'
         '<div class="card"><h2>Import from Apple Health</h2>'
         '<p class="m">Upload an export made by the Health Auto Export app (the .zip or the .json). '
-        'Importing the same period again is safe.</p><p><a href="/import">Import a file</a></p></div>')
+        f'Importing the same period again is safe.</p>{_last_import(store)}<p><a href="/import">Import a file</a></p></div>')
 
 
-def import_page(csrf: str) -> str:
+def import_page(store: Store, csrf: str) -> str:
     tok = f'<input type="hidden" name="csrf" value="{esc(csrf)}">'
     return ('<h1>Import from Apple Health</h1><div class="card">'
             f'<form method="post" action="/import" enctype="multipart/form-data">{tok}'
             '<label>Health Auto Export file (.zip or .json, up to 25 MB)</label>'
             '<input type="file" name="file" accept=".zip,.json" required>'
             '<button class="go">Import</button></form>'
+            '<p class="m">Large files can take a few seconds. The result is shown at the top of the next page.</p>'
+            f'{_last_import(store)}'
             '<p class="m">This adds steps, sleep, heart rate summaries, weight, workouts and calories to your own '
             'record. Nothing is shared with anyone else.</p></div>')

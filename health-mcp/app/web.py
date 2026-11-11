@@ -296,7 +296,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         return back("Note saved", False, "/settings")
 
     async def import_get(request: Request, s: dict[str, Any], store: Store) -> Response:
-        return page("Import", pages.import_page(s["csrf"]), s, "/settings", request)
+        return page("Import", pages.import_page(store, s["csrf"]), s, "/settings", request)
 
     async def import_post(request: Request, s: dict[str, Any], store: Store) -> Response:
         up = request.state.form.get("file")
@@ -312,7 +312,9 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             days = await asyncio.to_thread(store.import_daily_heart, heart)
         except apple.ImportError_ as e:
             return back(str(e), True, "/import")
-        return back(apple.summarise(counts, days), False, "/settings")
+        summary = apple.summarise(counts, days)
+        store.set_setting("last_import", f'{store.local(store.now()).strftime("%-d %b %Y %H:%M")}: {summary}')
+        return back(summary, False, "/settings")
 
     # ------------------------------------------------------------------ login
     async def login(request: Request) -> Response:
