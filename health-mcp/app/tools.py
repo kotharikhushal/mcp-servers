@@ -251,6 +251,7 @@ def register(mcp: FastMCP, store: Store) -> None:
         g, n = goals(store), nutrition_goals(store)
         return {"steps_goal": int(g["steps_goal"]), "sleep_goal_hours": g["sleep_goal"],
                 "calorie_goal_kcal": n["kcal_goal"], "protein_goal_g": n["protein_goal"], "salt_limit_g": n["salt_limit"], "goal_weight_kg": n["goal_weight"],
+                "fasting_weekdays": [("Mon","Tue","Wed","Thu","Fri","Sat","Sun")[i] for i in sorted(store.fasting_weekdays())],
                 "fasting_days_last_30": sorted(d.isoformat() for d in store.fasting_days(30)),
                 "gp_note": store.get_setting("gp_context") or None}
 
@@ -293,6 +294,18 @@ def register(mcp: FastMCP, store: Store) -> None:
         for d in days:
             store.set_fasting(d, fasting)
         return {"updated": len(days), "fasting": fasting}
+
+    @mcp.tool(annotations=WRITE)
+    def set_fasting_weekdays(weekdays: list[str]) -> dict[str, Any]:
+        """Make fasting repeat every week on these weekdays (Mon, Tue, Wed, Thu, Fri, Sat, Sun). An empty list
+        turns the weekly pattern off. Single dates are still set with set_fasting_days."""
+        names = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+        try:
+            days = {names.index(w.strip().lower()[:3]) for w in weekdays}
+        except ValueError:
+            return {"error": "Use weekday names such as Tue and Thu."}
+        store.set_fasting_weekdays(days)
+        return {"fasting_weekdays": [names[i].capitalize() for i in sorted(days)]}
 
     @mcp.tool(annotations=WRITE)
     def set_gp_note(text: str | None) -> dict[str, Any]:

@@ -111,6 +111,10 @@ details.confirm[open] summary{display:none}
 details.confirm .ask{font-size:13px;color:var(--ink2);text-align:right}
 .more summary{color:var(--accent);cursor:pointer;text-align:right;font-size:13px;padding:4px 0}
 .more .rows{margin-top:6px}
+.mini{min-height:40px;padding:0 14px;border:0;border-radius:12px;background:var(--accent);color:var(--on-accent);font:inherit;font-weight:700;cursor:pointer}
+.mini.ghost{background:var(--surface2);color:var(--ink2)}
+.acts{display:flex;gap:6px;align-items:center}.acts form{margin:0}
+.rows li.done .l b{color:var(--muted);text-decoration:line-through}
 /* tabs */
 nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;justify-content:center;
 background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);

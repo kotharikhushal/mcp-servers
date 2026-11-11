@@ -148,7 +148,69 @@ def _greeting(hour: int) -> str:
     return "Good morning" if hour < 12 else "Good afternoon" if hour < 18 else "Good evening"
 
 
-def today_page(store: Store, name: str) -> str:
+def skipped_ids(store: Store, day: date) -> set[str]:
+    return {x for x in (store.get_setting(f"skip:{day.isoformat()}") or "").split(",") if x}
+
+
+def meals_card(store: Store, menu: list[dict[str, Any]] | None, error: bool, csrf: str) -> str:
+    """Today's planned Mealie meals with one tap to log one as eaten (or skip it)."""
+    if error:
+        return '<div class="card"><h2>Today\'s meals</h2><p class="m" style="margin:0">Meal plan unavailable right now.</p></div>'
+    if menu is None:
+        return ""
+    today = store.local(store.now()).date()
+    if not menu:
+        return ('<div class="card"><h2>Today\'s meals</h2><p class="m" style="margin:0">Nothing planned for today. '
+                'Ask Claude to plan your meals, or log one yourself.</p><p style="margin:12px 0 0"><a class="cta" href="/log">Log a meal</a></p></div>')
+    skipped = skipped_ids(store, today)
+    eaten_names = [e["name"] for e in store.food_entries(1) if e["_day"] == today]
+    fasting = today in store.fasting_days(1)
+    ng = nutrition_goals(store)
+    rows, planned, eaten = [], 0.0, 0.0
+    for m in menu:
+        n = m.get("per_serving") or {}
+        kc = n.get("kcal")
+        name = m.get("recipe_name") or m.get("recipe") or m.get("note") or "Meal"
+        was_eaten = any(x.startswith(f"{name} x") and x.endswith("(from Mealie)") for x in eaten_names)
+        was_skipped = str(m["id"]) in skipped
+        if was_eaten:
+            eaten += kc or 0
+        if not was_skipped:
+            planned += kc or 0
+        bits = [(m["meal"] or "").capitalize()]
+        if kc:
+            bits.append(f"{kc:,.0f} kcal")
+        if n.get("protein_g"):
+            bits.append(f'{n["protein_g"]:.0f} g protein')
+        sub = " · ".join(b for b in bits if b)
+        eid = esc(m["id"])
+        if was_eaten:
+            act, cls = '<span class="pill">Logged</span>', ""
+        elif was_skipped:
+            act = (f'<form method="post" action="/meals/skip"><input type="hidden" name="csrf" value="{esc(csrf)}">'
+                   f'<input type="hidden" name="entry_id" value="{eid}"><input type="hidden" name="on" value="0">'
+                   '<button class="mini ghost">Undo skip</button></form>')
+            cls = " done"
+        elif not m.get("slug") or not kc:
+            act, cls = '<span class="pill">No calories</span>', ""
+        else:
+            def f(path: str, label: str, cls_: str = "mini") -> str:
+                return (f'<form method="post" action="{path}"><input type="hidden" name="csrf" value="{esc(csrf)}">'
+                        f'<input type="hidden" name="entry_id" value="{eid}"><input type="hidden" name="on" value="1">'
+                        f'<button class="{cls_}" aria-label="{esc(label)}: {esc(name)}">{esc(label)}</button></form>')
+            act, cls = f'<div class="acts">{f("/meals/eat", "I ate this")}{f("/meals/skip", "Skip", "mini ghost")}</div>', ""
+        rows.append(f'<li class="{cls.strip()}"><div class="l"><b>{esc(name)}</b><span>{esc(sub)}</span></div>{act}</li>')
+    foot = f"Eaten {eaten:,.0f} kcal of {planned:,.0f} planned"
+    if fasting:
+        foot += " · fasting day"
+    elif ng["kcal_goal"]:
+        foot += f' · goal {ng["kcal_goal"]:,.0f}'
+    return (f'<div class="card"><h2>Today\'s meals</h2><ul class="rows">{"".join(rows)}</ul>'
+            f'<p class="m" style="margin:10px 0 0">{esc(foot)}</p></div>')
+
+
+def today_page(store: Store, name: str, menu: list[dict[str, Any]] | None = None, menu_error: bool = False,
+               csrf: str = "") -> str:
     now = store.local(store.now())
     today = now.date()
     g = goals(store)
@@ -172,6 +234,7 @@ def today_page(store: Store, name: str) -> str:
     coach = (f'<div class="card coach"><div class="face" aria-hidden="true">C</div><div class="notes">'
              f'<h2>Coach notes</h2>{notes}</div></div>')
 
+    meals = meals_card(store, menu, menu_error, csrf)
     tiles = []
     hb = store.heart_by_day(7)
     hd = [(d, v) for d, v in sorted(hb.items()) if v]
@@ -232,7 +295,7 @@ def today_page(store: Store, name: str) -> str:
     sync = (f'<p class="m" style="text-align:center">Watch data synced {esc(st["last_sync"])}</p>'
             if st.get("last_sync") else "")
     return (f'<div class="greet"><h1>{_greeting(now.hour)}, {esc(name)}</h1><p>{esc(now.strftime("%A %-d %B"))}</p></div>'
-            f'{hero}{coach}<div class="sect"><h2>Your numbers</h2></div><div class="tiles">{"".join(tiles)}</div>{sync}'
+            f'{hero}{coach}{meals}<div class="sect"><h2>Your numbers</h2></div><div class="tiles">{"".join(tiles)}</div>{sync}'
             '<p class="m" style="text-align:center">Notes are based on your own numbers. They are not a diagnosis.</p>')
 
 
@@ -476,6 +539,12 @@ def weight_page(store: Store, csrf: str, d: int) -> str:
         third = ("To goal", f'{max(cur_avg - goal, 0):.1f} kg')
     else:
         third = ("Lowest", f"{min(kgs):.1f} kg")
+    goal_card = ('<div class="card"><h2>Goal weight</h2><form method="post" action="/settings/goal-weight">'
+                 f'<input type="hidden" name="csrf" value="{esc(csrf)}">'
+                 '<label for="gw">Your target in kg. Change it any time; leave empty to remove it.</label>'
+                 '<input id="gw" name="goal_weight" type="number" inputmode="decimal" min="40" max="200" step="0.5" '
+                 f'value="{f"{goal:g}" if goal else ""}" placeholder="e.g. 70">'
+                 '<button class="go">Save goal weight</button></form></div>')
     return (head + f'<div class="hero1">{last["kg"]:.1f}<small>kg</small></div>'
             f'<div class="delta">{delta}</div>'
             + chips("/weight", d)
@@ -483,7 +552,9 @@ def weight_page(store: Store, csrf: str, d: int) -> str:
             + stats([("7-day average", f"{cur_avg:.1f} kg" if cur_avg else "–"),
                      ("Change" + (" in period" if change is not None else ""), signed(change, " kg") if change is not None else "–"),
                      third])
-            + _notes(notes) + f'<div class="card"><h2>Weigh-ins</h2>{_rows(rows)}</div>'
+            + _notes(notes)
+            + goal_card
+            + f'<div class="card"><h2>Weigh-ins</h2>{_rows(rows)}</div>'
             + '<p style="margin:0 0 14px"><a class="cta" href="/log">Add your weight</a></p>')
 
 
