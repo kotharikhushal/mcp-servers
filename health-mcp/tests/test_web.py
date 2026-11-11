@@ -329,3 +329,21 @@ def test_referrer_policy_lets_browsers_send_a_real_origin_on_form_posts(env):
     assert ok.status_code == 303 and "ok=" in ok.headers["location"]
     # "null" is what a browser sends under no-referrer: refused, so the header must never go back
     assert c.post("/log/weight", data={"kg": "71", "csrf": "tok"}, headers={"origin": "null"}).status_code == 403
+
+
+def test_import_confirmation_is_prominent_and_remembered(env):
+    import json
+    from tests.test_apple import EXPORT
+    c, stores, _ = env
+    signed_in(c, "shivani")
+    c.follow_redirects = True
+    r = c.post("/import", data={"csrf": "tok"}, files={"file": ("e.json", json.dumps(EXPORT).encode(), "application/json")})
+    assert 'role="status"' in r.text and "Done: Imported" in r.text
+    again = c.get("/import").text
+    assert "Last import:" in again and "new nights" in again          # still visible after the message is gone
+    assert "Last import:" in c.get("/settings").text
+    bad = c.post("/import", data={"csrf": "tok"}, files={"file": ("e.json", b"nope", "application/json")})
+    assert "Problem: " in bad.text
+    c.cookies.clear()
+    signed_in(c, "khushal")
+    assert "Nothing imported yet" in c.get("/import").text           # per person
