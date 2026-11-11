@@ -117,6 +117,14 @@ the servings eaten and writes it to the food log). The token is only sent to `ME
 returned by a tool. Also: `recipes_missing_nutrition` and `set_recipes_nutrition` (fill in per-serving nutrition in bulk, read back to verify),
 `add_meals_to_plan`, `remove_meal_plan_entry`, `get_shopping_lists` and `add_recipes_to_shopping_list`. Recipes without nutrition filled in are not logged automatically. Needs Mealie v2 or later.
 
+More Mealie tools, so common chores need no manual work in the Mealie app:
+- Shopping lists: `create_shopping_list`, `delete_shopping_list` (needs the exact name), `add_shopping_items`, `update_shopping_items` (tick, untick or remove by id or by words, for example pantry staples), `clear_checked_shopping_items`. `get_shopping_lists(include_items=true)` reads the real items.
+- Recipes: `create_recipe`, `update_recipe` (servings, ingredients, steps), `import_recipe_from_url`, `set_recipe_tags`, `find_duplicate_recipes`, `find_recipes_by_nutrition`, `recipes_without_ingredients`, `delete_recipes` (refuses recipes that have ingredients unless told otherwise).
+- Meal plan: `get_plan_nutrition` (calories, protein and salt per meal and per day, fasting days marked), `move_meal_plan_entry`, `clear_meal_plan`, `log_planned_meal` (log a planned meal as eaten).
+Writes that Mealie could silently ignore are read back and reported if they did not save.
+
+Health settings tools (always on): `get_settings`, `set_goals`, `set_fasting_days`, `set_gp_note`.
+
 ## Development
     pip install -r requirements.txt -r requirements-dev.txt
     pytest tests && python tests/e2e.py

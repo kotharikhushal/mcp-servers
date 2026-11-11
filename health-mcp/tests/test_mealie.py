@@ -192,7 +192,7 @@ def test_delete_shopping_and_id_checks():
     c = client()
     assert c.delete_plan_entry("abc") == {"deleted": True}
     assert c.shopping_lists() == [{"id": "L1", "name": "Weekly", "items": 2, "unchecked": 1}]
-    assert c.shopping_lists(True)[0]["unchecked_items"] == ["2 onions"]
+    assert c.shopping_lists(True)[0]["unchecked_items"] == [{"id": None, "text": "2 onions"}]
     c.add_recipes_to_list("L1", {"aloo-gobi": 2})
     assert STATE["list_body"] == [{"recipeId": "r1", "recipeIncrementQuantity": 2}]
     for bad in (lambda: c.delete_plan_entry("../x"), lambda: c.add_recipes_to_list("a/b", {"aloo-gobi": 1})):
