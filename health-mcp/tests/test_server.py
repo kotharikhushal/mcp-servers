@@ -63,3 +63,28 @@ def test_oversized_payload_rejected(tmp_path, monkeypatch):
     c, _ = client(tmp_path)
     r = c.post("/ingest", content=b"{" + b" " * 500 + b"}", headers={**GOOD, "content-type": "application/json"})
     assert r.status_code == 413
+
+
+def test_each_person_reaches_only_their_own_data(tmp_path, monkeypatch):
+    from mcp.server.auth.provider import AccessToken
+    from app import server, web
+    k = server.Store(str(tmp_path / "health.db"), tz="Europe/London")
+    stores = web.Stores(str(tmp_path), "khushal", "Europe/London", k)
+    stores.get("shivani").log_weight(60.0, None)
+    k.log_weight(76.0, None)
+    links = server.parse_mcp_users("khushal:K-SUB|khushal@example.com, shivani:S-SUB")
+    assert links == {"k-sub": "khushal", "khushal@example.com": "khushal", "s-sub": "shivani"}
+    ps = server.PersonStore(stores, links)
+    who = {"v": None}
+    monkeypatch.setattr(server, "get_access_token", lambda: who["v"])
+    who["v"] = AccessToken(token="t", client_id="c", scopes=[], subject="S-SUB", claims={"sub": "S-SUB"})
+    assert ps.weight_readings(1)[0]["kg"] == 60.0
+    who["v"] = AccessToken(token="t", client_id="c", scopes=[], subject="uuid-1", claims={"email": "Khushal@example.com"})
+    assert ps.weight_readings(1)[0]["kg"] == 76.0
+    who["v"] = AccessToken(token="t", client_id="c", scopes=[], subject="stranger", claims={})
+    with pytest.raises(server.PersonRequired) as e:
+        ps.weight_readings(1)
+    assert "stranger" in str(e.value) and "MCP_USERS" in str(e.value)
+    assert server.PersonStore(stores, {}).weight_readings(1)[0]["kg"] == 76.0   # unset: default person, as before
+    with pytest.raises(server.ConfigError):
+        server.parse_mcp_users("shivani")

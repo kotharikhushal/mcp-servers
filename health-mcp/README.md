@@ -94,6 +94,14 @@ Pangolin: a second public resource `wellness.example.com` to `http://<unraid-ip>
 ```
 A person not listed in `WEB_USERS` is refused even if Authelia lets them sign in.
 
+### Claude connector for two people
+
+By default the Claude connector reads the default person's data for everyone who signs in. To give each person their own data, set `MCP_USERS` to link each `WEB_USERS` name to their Authelia sign-in id (the `sub`, username or email in their token; separate several ids with `|`):
+
+    MCP_USERS=khushal:khushal@example.com,shivani:shivani@example.com
+
+A person whose sign-in is not listed gets an error that shows the id to add. Phone sync (`/ingest`) still feeds the default person only; other people add data through the app or the Apple Health import.
+
 **GP report** (`/gp`): a printable home blood pressure record (averages with and without the first day, morning and
 evening averages, highest and lowest, readings by day, completeness, a free-text context note). Use the browser's
 Print or Save as PDF.
