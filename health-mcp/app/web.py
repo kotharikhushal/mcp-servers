@@ -322,8 +322,23 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             return back("Goals must be numbers", True, "/settings")
         if not (1000 <= steps <= 50000) or not (4 <= sleep <= 12):
             return back("Steps must be 1,000 to 50,000 and sleep 4 to 12 hours", True, "/settings")
+        extra: dict[str, str | None] = {}
+        for k, (lo, hi) in pages.NUTRITION_GOALS.items():
+            raw = str(f.get(k, "")).strip()
+            if not raw:
+                extra[k] = None
+                continue
+            try:
+                v = float(raw)
+            except ValueError:
+                return back("Calorie, protein and salt goals must be numbers", True, "/settings")
+            if not lo <= v <= hi:
+                return back(f"{k.replace('_', ' ').capitalize()} must be between {lo} and {hi}", True, "/settings")
+            extra[k] = f"{v:g}"
         store.set_setting("steps_goal", str(steps))
         store.set_setting("sleep_goal", f"{sleep:g}")
+        for k, v in extra.items():
+            store.set_setting(k, v)
         return back("Goals saved", False, "/settings")
 
     async def public_file(request: Request) -> Response:

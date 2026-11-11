@@ -247,16 +247,25 @@ def register(mcp: FastMCP, store: Store) -> None:
     def get_settings() -> dict[str, Any]:
         """The user's goals (daily steps, sleep hours), fasting days in the last 30 days and the GP note saved
         in the app."""
-        from .pages import goals
-        g = goals(store)
+        from .pages import goals, nutrition_goals
+        g, n = goals(store), nutrition_goals(store)
         return {"steps_goal": int(g["steps_goal"]), "sleep_goal_hours": g["sleep_goal"],
+                "calorie_goal_kcal": n["kcal_goal"], "protein_goal_g": n["protein_goal"], "salt_limit_g": n["salt_limit"],
                 "fasting_days_last_30": sorted(d.isoformat() for d in store.fasting_days(30)),
                 "gp_note": store.get_setting("gp_context") or None}
 
     @mcp.tool(annotations=WRITE)
-    def set_goals(steps_goal: int | None = None, sleep_goal_hours: float | None = None) -> dict[str, Any]:
-        """Change the daily step goal (1,000 to 50,000) and/or the sleep goal (4 to 12 hours). Only when the user
-        asked for the new value."""
+    def set_goals(steps_goal: int | None = None, sleep_goal_hours: float | None = None,
+                  calorie_goal_kcal: float | None = None, protein_goal_g: float | None = None,
+                  salt_limit_g: float | None = None) -> dict[str, Any]:
+        """Change the daily goals shown in the wellness app: steps (1,000 to 50,000), sleep (4 to 12 hours),
+        calories (1,000 to 4,000 kcal), protein (20 to 300 g) and the salt limit (1 to 12 g). Only values the user
+        agreed to. The app then shows calories, protein and salt left today."""
+        from .pages import NUTRITION_GOALS
+        for key, v in (("kcal_goal", calorie_goal_kcal), ("protein_goal", protein_goal_g), ("salt_limit", salt_limit_g)):
+            lo, hi = NUTRITION_GOALS[key]
+            if v is not None and not lo <= v <= hi:
+                return {"error": f"{key} must be between {lo} and {hi}"}
         if steps_goal is not None and not 1000 <= steps_goal <= 50000:
             return {"error": "steps_goal must be between 1,000 and 50,000"}
         if sleep_goal_hours is not None and not 4 <= sleep_goal_hours <= 12:
@@ -265,6 +274,9 @@ def register(mcp: FastMCP, store: Store) -> None:
             store.set_setting("steps_goal", str(int(steps_goal)))
         if sleep_goal_hours is not None:
             store.set_setting("sleep_goal", f"{sleep_goal_hours:g}")
+        for key, v in (("kcal_goal", calorie_goal_kcal), ("protein_goal", protein_goal_g), ("salt_limit", salt_limit_g)):
+            if v is not None:
+                store.set_setting(key, f"{v:g}")
         return get_settings()
 
     @mcp.tool(annotations=WRITE)

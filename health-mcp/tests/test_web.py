@@ -267,6 +267,26 @@ def test_goals_are_validated_saved_and_used(env):
     assert stores.get("shivani").get_setting("steps_goal") is None
 
 
+def test_calorie_protein_and_salt_goals_show_what_is_left_today(env):
+    c, stores, _ = env
+    signed_in(c)
+    base = {"csrf": "tok", "steps_goal": "10000", "sleep_goal": "8"}
+    for bad in ({"kcal_goal": "300"}, {"protein_goal": "x"}, {"salt_limit": "50"}):
+        assert "err=" in c.post("/settings/goals", data={**base, **bad}).headers["location"]
+    assert stores.get("khushal").get_setting("kcal_goal") is None
+    k = stores.get("khushal")
+    k.log_meal("Test lunch", 1560, 87, None, None, None, None, 4.4, None)
+    ok = c.post("/settings/goals", data={**base, "kcal_goal": "1850", "protein_goal": "120", "salt_limit": "6"})
+    assert "ok=" in ok.headers["location"]
+    food = c.get("/food").text
+    assert "Goal 1,850 kcal" in food and "290 left" in food and "of 120 g" in food and "limit is 6 g" in food
+    assert "290 kcal left" in c.get("/").text
+    assert 'value="1850"' in c.get("/settings").text
+    assert stores.get("shivani").get_setting("kcal_goal") is None
+    c.post("/settings/goals", data=base)  # blank fields clear the goals
+    assert k.get_setting("kcal_goal") is None and "Goal 1,850" not in c.get("/food").text
+
+
 def test_phone_install_files_are_public_and_the_csp_allows_the_manifest(env):
     c, _, _ = env
     m = c.get("/manifest.webmanifest")

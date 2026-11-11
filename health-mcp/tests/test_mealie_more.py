@@ -197,5 +197,8 @@ def test_all_new_tools_exist_and_health_settings_tools_work(tmp_path, monkeypatc
     assert call(mcp, "set_fasting_days", dates=["2026-11-12", "2026-11-17"])["updated"] == 2
     assert "error" in call(mcp, "set_goals", steps_goal=5)
     s = call(mcp, "set_goals", steps_goal=10000, sleep_goal_hours=7.5)
-    assert s["steps_goal"] == 10000 and s["sleep_goal_hours"] == 7.5
+    assert s["steps_goal"] == 10000 and s["sleep_goal_hours"] == 7.5 and s["calorie_goal_kcal"] is None
+    assert "error" in call(mcp, "set_goals", calorie_goal_kcal=100)
+    n = call(mcp, "set_goals", calorie_goal_kcal=1850, protein_goal_g=120, salt_limit_g=6)
+    assert (n["calorie_goal_kcal"], n["protein_goal_g"], n["salt_limit_g"]) == (1850, 120, 6) and n["steps_goal"] == 10000
     assert call(mcp, "set_gp_note", text="Losartan 25 mg from 10 Nov")["saved"] and call(mcp, "get_settings")["gp_note"].startswith("Losartan")

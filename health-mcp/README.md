@@ -123,7 +123,7 @@ More Mealie tools, so common chores need no manual work in the Mealie app:
 - Meal plan: `get_plan_nutrition` (calories, protein and salt per meal and per day, fasting days marked), `move_meal_plan_entry`, `clear_meal_plan`, `log_planned_meal` (log a planned meal as eaten).
 Writes that Mealie could silently ignore are read back and reported if they did not save.
 
-Health settings tools (always on): `get_settings`, `set_goals`, `set_fasting_days`, `set_gp_note`.
+Health settings tools (always on; `set_goals` also sets the optional daily calorie, protein and salt targets the app shows as "left today"): `get_settings`, `set_goals`, `set_fasting_days`, `set_gp_note`.
 
 ## Development
     pip install -r requirements.txt -r requirements-dev.txt
