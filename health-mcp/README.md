@@ -114,7 +114,8 @@ Set `MEALIE_URL` and `MEALIE_API_TOKEN` in `.env` (token from Mealie, User profi
 The Health connector then also offers `mealie_status`, `search_recipes`, `get_recipe` (with nutrition per
 serving), `get_meal_plan`, `add_to_meal_plan` and `log_recipe_as_meal` (scales the recipe's own nutrition by
 the servings eaten and writes it to the food log). The token is only sent to `MEALIE_URL` and is never
-returned by a tool. Recipes without nutrition filled in are not logged automatically. Needs Mealie v2 or later.
+returned by a tool. Also: `recipes_missing_nutrition` and `set_recipes_nutrition` (fill in per-serving nutrition in bulk, read back to verify),
+`add_meals_to_plan`, `remove_meal_plan_entry`, `get_shopping_lists` and `add_recipes_to_shopping_list`. Recipes without nutrition filled in are not logged automatically. Needs Mealie v2 or later.
 
 ## Development
     pip install -r requirements.txt -r requirements-dev.txt

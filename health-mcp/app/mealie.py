@@ -99,6 +99,72 @@ class Mealie:
                 "nutrition_per_serving": nut or None,
                 "nutrition_note": None if nut else "This recipe has no nutrition filled in in Mealie, so any figures must be estimated."}
 
+    def all_recipes(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for page in range(1, 21):
+            data = self._call("GET", "/api/recipes", params={"page": page, "perPage": 100})
+            items = data.get("items") or []
+            out.extend(items)
+            if len(items) < 100 or page >= (data.get("total_pages") or page):
+                break
+        return out
+
+    def needing_nutrition(self, limit: int = 10, skip: int = 0) -> dict[str, Any]:
+        """Recipes with no calories filled in, with what is needed to estimate them."""
+        everything = self.all_recipes()
+        todo, checked = [], 0
+        for r in everything:
+            slug = r.get("slug")
+            if not slug:
+                continue
+            checked += 1
+            full = self.recipe(slug)
+            if "kcal" not in (full.get("nutrition_per_serving") or {}):
+                todo.append(full)
+        page = todo[max(skip, 0):max(skip, 0) + max(1, min(limit, 25))]
+        return {"recipes_total": checked, "missing_nutrition": len(todo), "shown": len(page),
+                "recipes": [{k: r[k] for k in ("slug", "name", "servings", "ingredients")} for r in page]}
+
+    def set_nutrition(self, slug: str, n: Mapping[str, float | None]) -> dict[str, Any]:
+        """Write per-serving nutrition (kcal, protein_g, carbs_g, fat_g, fibre_g, sugar_g, salt_g) to a recipe,
+        then read it back so a silent failure is reported instead of assumed."""
+        if not n.get("kcal") or not 0 < n["kcal"] <= 3000:
+            raise MealieError("kcal per serving must be between 1 and 3000.")
+        for k in ("protein_g", "carbs_g", "fat_g", "fibre_g", "sugar_g", "salt_g"):
+            v = n.get(k)
+            if v is not None and not 0 <= v <= 500:
+                raise MealieError(f"{k} per serving looks wrong ({v}).")
+        body: dict[str, str] = {"calories": f"{n['kcal']:g}"}
+        for key, field in (("protein_g", "proteinContent"), ("carbs_g", "carbohydrateContent"), ("fat_g", "fatContent"),
+                           ("fibre_g", "fiberContent"), ("sugar_g", "sugarContent")):
+            if n.get(key) is not None:
+                body[field] = f"{n[key]:g}"
+        if n.get("salt_g") is not None:
+            body["sodiumContent"] = f"{n['salt_g'] / SALT_G_PER_SODIUM_MG:.0f}"
+        self.recipe(slug)  # validates the slug and that it exists
+        self._call("PATCH", f"/api/recipes/{slug.strip().strip('/')}", json={"nutrition": body})
+        back = self.recipe(slug)["nutrition_per_serving"] or {}
+        if back.get("kcal") != float(n["kcal"]):
+            raise MealieError("Mealie accepted the request but the nutrition did not save. Check the Mealie version.")
+        return {"slug": slug, "saved": back}
+
+    def delete_plan_entry(self, entry_id: str) -> dict[str, Any]:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", str(entry_id)):
+            raise MealieError("Bad meal plan entry id.")
+        self._call("DELETE", f"{self._plans_path()}/{entry_id}")
+        return {"deleted": True}
+
+    def shopping_lists(self) -> list[dict[str, Any]]:
+        data = self._call("GET", "/api/households/shopping/lists", params={"perPage": 50})
+        return [{"id": x.get("id"), "name": x.get("name"), "items": len(x.get("listItems") or [])} for x in data.get("items") or []]
+
+    def add_recipes_to_list(self, list_id: str, slugs: Mapping[str, float]) -> dict[str, Any]:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", str(list_id)):
+            raise MealieError("Bad shopping list id.")
+        body = [{"recipeId": self.recipe(slug)["id"], "recipeIncrementQuantity": q} for slug, q in slugs.items()]
+        self._call("POST", f"/api/households/shopping/lists/{list_id}/recipe", json=body)
+        return {"added_recipes": list(slugs)}
+
     def plan(self, days: int = 7, start: date | None = None) -> list[dict[str, Any]]:
         start = start or date.today()
         end = start + timedelta(days=max(1, min(days, 60)) - 1)
@@ -126,7 +192,7 @@ class Mealie:
         return {"id": e.get("id"), "date": e.get("date"), "meal": e.get("entryType")}
 
 
-def register(mcp: Any, store: Any, mealie: Mealie, parse_when: Any, read: Any, write: Any) -> None:
+def register(mcp: Any, store: Any, mealie: Mealie, parse_when: Any, read: Any, write: Any, delete: Any) -> None:
     """Adds the Mealie tools. Errors become plain messages instead of stack traces."""
     def guard(fn: Any) -> dict[str, Any]:
         try:
@@ -170,6 +236,65 @@ def register(mcp: Any, store: Any, mealie: Mealie, parse_when: Any, read: Any, w
         except ValueError:
             return {"error": "date_iso must be an ISO date such as 2026-11-12"}
         return guard(lambda: mealie.add_to_plan(d, meal, recipe_slug, title))
+
+    @mcp.tool(annotations=read)
+    def recipes_missing_nutrition(limit: int = 10, skip: int = 0) -> dict[str, Any]:
+        """Mealie recipes with no calories filled in, with servings and ingredients so the nutrition can be
+        estimated. Pass `skip` to page. Follow with set_recipes_nutrition."""
+        return guard(lambda: mealie.needing_nutrition(limit, skip))
+
+    @mcp.tool(annotations=write)
+    def set_recipes_nutrition(recipes: list[dict[str, Any]]) -> dict[str, Any]:
+        """Save estimated nutrition PER SERVING onto Mealie recipes. Each entry: slug, kcal, protein_g, carbs_g,
+        fat_g, fibre_g, sugar_g, salt_g (all numbers; only slug and kcal are required). Up to 25 at once.
+        These are estimates from the ingredient list: tell the user so, and show them before saving."""
+        if not 0 < len(recipes) <= 25:
+            return {"error": "Send between 1 and 25 recipes at a time."}
+        results = []
+        for r in recipes:
+            slug = str(r.get("slug", ""))
+            try:
+                fields = {k: (float(r[k]) if r.get(k) is not None else None) for k in
+                          ("kcal", "protein_g", "carbs_g", "fat_g", "fibre_g", "sugar_g", "salt_g")}
+                results.append(mealie.set_nutrition(slug, fields))
+            except (MealieError, TypeError, ValueError) as e:
+                results.append({"slug": slug, "error": str(e) if isinstance(e, MealieError) else "numbers only"})
+        return {"results": results}
+
+    @mcp.tool(annotations=write)
+    def add_meals_to_plan(entries: list[dict[str, Any]]) -> dict[str, Any]:
+        """Add several entries to the Mealie meal plan in one call. Each: date_iso, meal (breakfast, lunch, dinner
+        or side) and recipe_slug or title. Up to 30. Only add what the user agreed to."""
+        if not 0 < len(entries) <= 30:
+            return {"error": "Send between 1 and 30 entries at a time."}
+        results = []
+        for e in entries:
+            try:
+                d = date.fromisoformat(str(e.get("date_iso")))
+                results.append(mealie.add_to_plan(d, str(e.get("meal")), e.get("recipe_slug"), e.get("title")))
+            except ValueError:
+                results.append({"error": "bad date_iso", "entry": str(e)[:80]})
+            except MealieError as err:
+                results.append({"error": str(err), "entry": str(e)[:80]})
+        return {"results": results}
+
+    @mcp.tool(annotations=delete)
+    def remove_meal_plan_entry(entry_id: str) -> dict[str, Any]:
+        """Remove one entry from the Mealie meal plan (ids come from get_meal_plan). Confirm with the user first."""
+        return guard(lambda: mealie.delete_plan_entry(entry_id))
+
+    @mcp.tool(annotations=read)
+    def get_shopping_lists() -> dict[str, Any]:
+        """The user's Mealie shopping lists (id, name, item count)."""
+        return guard(lambda: {"lists": mealie.shopping_lists()})
+
+    @mcp.tool(annotations=write)
+    def add_recipes_to_shopping_list(list_id: str, recipe_slugs: list[str], servings_multiplier: float = 1.0) -> dict[str, Any]:
+        """Add the ingredients of Mealie recipes to a shopping list (Mealie merges and scales them).
+        servings_multiplier 2 means double quantities."""
+        if not 0 < servings_multiplier <= 10 or not 0 < len(recipe_slugs) <= 30:
+            return {"error": "Use 1 to 30 recipes and a multiplier above 0 and at most 10."}
+        return guard(lambda: mealie.add_recipes_to_list(list_id, {s: servings_multiplier for s in recipe_slugs}))
 
     @mcp.tool(annotations=write)
     def log_recipe_as_meal(slug: str, servings: float = 1.0, when: str | None = None) -> dict[str, Any]:

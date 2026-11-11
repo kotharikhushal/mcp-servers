@@ -82,7 +82,7 @@ def create(env: Mapping[str, str] = os.environ) -> tuple[FastMCP, Store, OIDCVer
         if not (mealie_url and mealie_token) or urlparse(mealie_url).scheme not in ("http", "https") \
                 or not urlparse(mealie_url).netloc:
             raise ConfigError("MEALIE_URL (http or https address) and MEALIE_API_TOKEN must both be set")
-        mealie.register(mcp, store, mealie.Mealie(mealie_url, mealie_token), tools._parse_when, tools.READ, tools.WRITE)
+        mealie.register(mcp, store, mealie.Mealie(mealie_url, mealie_token), tools._parse_when, tools.READ, tools.WRITE, tools.DELETE)
 
     # A token in the URL ends up in proxy and access logs, so this is off unless asked for.
     allow_query_key = (env.get("ALLOW_QUERY_KEY") or "").lower() in ("1", "true", "yes")

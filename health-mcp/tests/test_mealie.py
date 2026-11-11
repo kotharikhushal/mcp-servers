@@ -15,7 +15,25 @@ BARE = {"id": "r2", "slug": "mystery", "name": "Mystery", "nutrition": {}, "reci
 SEEN = []
 
 
+STATE = {"patched": None, "refuse_patch": False}
+
+
 def handler(req: httpx.Request) -> httpx.Response:
+    import json as _j
+    if req.method == "PATCH" and req.url.path == "/api/recipes/mystery":
+        if not STATE["refuse_patch"]:
+            BARE["nutrition"] = _j.loads(req.content)["nutrition"]
+        STATE["patched"] = _j.loads(req.content)
+        return httpx.Response(200, json={})
+    if req.url.path == "/api/recipes" and req.url.params.get("perPage") == "100":
+        return httpx.Response(200, json={"items": [RECIPE, BARE], "total_pages": 1})
+    if req.method == "DELETE" and req.url.path == "/api/households/mealplans/abc":
+        return httpx.Response(200, json={})
+    if req.url.path == "/api/households/shopping/lists" and req.method == "GET":
+        return httpx.Response(200, json={"items": [{"id": "L1", "name": "Weekly", "listItems": [1, 2]}]})
+    if req.url.path == "/api/households/shopping/lists/L1/recipe" and req.method == "POST":
+        STATE["list_body"] = _j.loads(req.content)
+        return httpx.Response(200, json={})
     SEEN.append((req.method, req.url.path, dict(req.url.params), req.headers.get("authorization")))
     p = req.url.path
     if req.headers.get("authorization") != "Bearer tok":
@@ -127,3 +145,70 @@ def test_log_recipe_as_meal_scales_and_refuses_when_no_nutrition(tmp_path, monke
     assert "error" in call(mcp, "log_recipe_as_meal", slug="nope")
     assert len(store.food_entries(5)) == n
     assert call(mcp, "mealie_status")["version"] == "v2.3.0"
+
+
+def reset():
+    BARE["nutrition"] = {}
+    STATE.update(patched=None, refuse_patch=False)
+
+
+def test_missing_nutrition_lists_only_recipes_without_calories():
+    reset()
+    out = client().needing_nutrition()
+    assert out["recipes_total"] == 2 and out["missing_nutrition"] == 1 and out["recipes"][0]["slug"] == "mystery"
+
+
+def test_set_nutrition_writes_converts_salt_to_sodium_and_verifies():
+    reset()
+    c = client()
+    res = c.set_nutrition("mystery", {"kcal": 420, "protein_g": 18, "carbs_g": 50, "fat_g": 14, "fibre_g": 9,
+                                      "sugar_g": 6, "salt_g": 1.25})
+    assert STATE["patched"]["nutrition"]["calories"] == "420" and STATE["patched"]["nutrition"]["sodiumContent"] == "500"
+    assert res["saved"]["kcal"] == 420 and res["saved"]["salt_g"] == 1.25
+    assert "kcal" in c.recipe("mystery")["nutrition_per_serving"]
+
+
+def test_set_nutrition_validates_and_reports_a_silent_failure():
+    reset()
+    c = client()
+    for bad in ({"kcal": 0}, {"kcal": 99999}, {"kcal": 300, "protein_g": -4}, {"kcal": 300, "salt_g": 9000}):
+        with pytest.raises(mealie.MealieError):
+            c.set_nutrition("mystery", bad)
+    assert STATE["patched"] is None
+    STATE["refuse_patch"] = True
+    with pytest.raises(mealie.MealieError) as e:
+        c.set_nutrition("mystery", {"kcal": 300})
+    assert "did not save" in str(e.value)
+    reset()
+
+
+def test_delete_shopping_and_id_checks():
+    c = client()
+    assert c.delete_plan_entry("abc") == {"deleted": True}
+    assert c.shopping_lists() == [{"id": "L1", "name": "Weekly", "items": 2}]
+    c.add_recipes_to_list("L1", {"aloo-gobi": 2})
+    assert STATE["list_body"] == [{"recipeId": "r1", "recipeIncrementQuantity": 2}]
+    for bad in (lambda: c.delete_plan_entry("../x"), lambda: c.add_recipes_to_list("a/b", {"aloo-gobi": 1})):
+        with pytest.raises(mealie.MealieError):
+            bad()
+
+
+def test_new_tools_through_mcp_with_batch_limits(tmp_path, monkeypatch):
+    reset()
+    real = mealie.Mealie
+    monkeypatch.setattr(mealie, "Mealie", lambda url, tok: real(url, tok, httpx.Client(transport=httpx.MockTransport(handler))))
+    mcp, _, _ = server.create(dict(BASE, DATA_DIR=str(tmp_path), MEALIE_URL="https://m.example.com", MEALIE_API_TOKEN="tok"))
+    assert {"recipes_missing_nutrition", "set_recipes_nutrition", "add_meals_to_plan", "remove_meal_plan_entry",
+            "get_shopping_lists", "add_recipes_to_shopping_list"} <= tool_names(mcp)
+    r = call(mcp, "set_recipes_nutrition", recipes=[{"slug": "mystery", "kcal": 410, "salt_g": 1.0},
+                                                    {"slug": "mystery", "kcal": 0}, {"slug": "../x", "kcal": 5}])
+    assert r["results"][0]["saved"]["kcal"] == 410 and "error" in r["results"][1] and "error" in r["results"][2]
+    assert "error" in call(mcp, "set_recipes_nutrition", recipes=[])
+    assert "error" in call(mcp, "add_meals_to_plan", entries=[])
+    res = call(mcp, "add_meals_to_plan", entries=[{"date_iso": "2026-11-13", "meal": "dinner", "recipe_slug": "aloo-gobi"},
+                                                  {"date_iso": "nope", "meal": "dinner", "title": "x"},
+                                                  {"date_iso": "2026-11-13", "meal": "tea", "title": "x"}])["results"]
+    assert res[0]["meal"] == "dinner" and "error" in res[1] and "error" in res[2]
+    assert "error" in call(mcp, "add_recipes_to_shopping_list", list_id="L1", recipe_slugs=["a"], servings_multiplier=0)
+    assert call(mcp, "add_recipes_to_shopping_list", list_id="L1", recipe_slugs=["aloo-gobi"])["added_recipes"] == ["aloo-gobi"]
+    reset()
