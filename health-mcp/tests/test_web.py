@@ -580,3 +580,20 @@ def test_log_page_is_split_into_tabs(env):
     assert 'action="/log/weight"' in c.get("/log?t=weight").text and 'action="/log/meal"' in c.get("/log?t=nonsense").text
     r = c.post("/log/bp", data={"csrf": "tok", "systolic": "120", "diastolic": "80"})
     assert r.headers["location"].startswith("/log?t=bp&ok=")
+
+
+def test_each_person_picks_a_mode_and_colour_theme_and_the_font_is_served(env):
+    c, stores, _ = env
+    signed_in(c)
+    assert 'data-mode="auto" data-palette="tide"' in c.get("/").text
+    r = c.post("/settings/appearance", data={"csrf": "tok", "mode": "dark", "palette": "dusk"})
+    assert "ok=" in r.headers["location"]
+    home = c.get("/").text
+    assert 'data-mode="dark" data-palette="dusk"' in home and 'name="palette" value="dusk" checked' in c.get("/settings").text
+    assert stores.get("shivani").get_setting("palette") is None            # per person
+    assert "err=" in c.post("/settings/appearance", data={"csrf": "tok", "mode": "neon", "palette": "dusk"}).headers["location"]
+    c.post("/settings/appearance", data={"csrf": "tok", "mode": "auto", "palette": "tide"})
+    assert stores.get("khushal").get_setting("palette") is None and stores.get("khushal").get_setting("mode") is None
+    f = c.get("/fonts/bricolage-grotesque.woff2")
+    assert f.status_code == 200 and f.headers["content-type"] == "font/woff2" and f.content[:4] == b"wOF2"
+    assert "font-src 'self'" in c.get("/").headers["content-security-policy"]

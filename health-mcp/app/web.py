@@ -40,14 +40,14 @@ LOGIN_COOKIE = "wellness_login"
 SESSION_SECONDS = 7 * 86400
 LOGIN_SECONDS = 600
 CSP = ("default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; manifest-src 'self'; "
-       "form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+       "font-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 STATIC = Path(__file__).parent / "static"
 MANIFEST = {"name": "Wellness", "short_name": "Wellness", "start_url": "/", "scope": "/", "display": "standalone",
             "background_color": "#F1F5F8", "theme_color": "#0B7A75", "description": "Your health at a glance",
             "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
                       {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
                       {"src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]}
-PUBLIC_ICONS = {"/icon-192.png": "icon-192.png", "/icon-512.png": "icon-512.png",
+PUBLIC_ICONS = {"/fonts/bricolage-grotesque.woff2": "bricolage-grotesque.woff2", "/icon-192.png": "icon-192.png", "/icon-512.png": "icon-512.png",
                 "/icon-maskable-512.png": "icon-maskable-512.png", "/apple-touch-icon.png": "apple-touch-icon.png"}
 
 
@@ -197,7 +197,8 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         flash = request.query_params.get("ok") or request.query_params.get("err") or ""
         return HTMLResponse(pages.layout(title, body, name=users[s["u"]], active=active, csrf=s["csrf"],
                                          flash=flash[:200], flash_err=bool(request.query_params.get("err")),
-                                         back=back, tint=tint))
+                                         back=back, tint=tint, mode=stores.get(s["u"]).get_setting("mode") or "auto",
+                                         palette=stores.get(s["u"]).get_setting("palette") or "tide"))
 
     menu_cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 
@@ -282,6 +283,15 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         vals = request.state.form.getlist("wd") if hasattr(request.state.form, "getlist") else []
         store.set_fasting_weekdays({int(v) for v in vals if str(v).isdigit() and 0 <= int(v) <= 6})
         return back("Fasting days saved", False, "/settings")
+
+    async def appearance_post(request: Request, s: dict[str, Any], store: Store) -> Response:
+        f = request.state.form
+        mode, palette = str(f.get("mode", "")), str(f.get("palette", ""))
+        if mode not in pages.MODES or palette not in pages.PALETTES:
+            return back("Choose a mode and a colour theme", True, "/settings")
+        store.set_setting("mode", None if mode == "auto" else mode)
+        store.set_setting("palette", None if palette == "tide" else palette)
+        return back("Appearance saved", False, "/settings")
 
     async def goal_weight(request: Request, s: dict[str, Any], store: Store) -> Response:
         raw = str(request.state.form.get("goal_weight", "")).strip()
@@ -442,8 +452,8 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             resp = JSONResponse(MANIFEST, media_type="application/manifest+json")
         else:
             f = STATIC / PUBLIC_ICONS[request.url.path]
-            resp = Response(f.read_bytes(), media_type="image/png")
-        resp.headers["Cache-Control"] = "public, max-age=86400"
+            resp = Response(f.read_bytes(), media_type="font/woff2" if f.suffix == ".woff2" else "image/png")
+        resp.headers["Cache-Control"] = "public, max-age=2592000" if request.url.path.startswith("/fonts/") else "public, max-age=86400"
         resp.headers["X-Content-Type-Options"] = "nosniff"
         return resp
 
@@ -563,6 +573,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         Route("/meals/eat", authed(meals_eat, post=True), methods=["POST"]),
         Route("/meals/swap", authed(swap_get)), Route("/meals/swap", authed(swap_post, post=True), methods=["POST"]),
         Route("/meals/skip", authed(meals_skip, post=True), methods=["POST"]),
+        Route("/settings/appearance", authed(appearance_post, post=True), methods=["POST"]),
         Route("/settings/goal-weight", authed(goal_weight, post=True), methods=["POST"]),
         Route("/logout", authed(logout, post=True), methods=["POST"]),
         Route("/login", login), Route("/callback", callback), Route("/healthz", healthz),

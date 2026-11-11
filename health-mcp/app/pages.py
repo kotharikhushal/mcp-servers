@@ -12,7 +12,7 @@ from typing import Any
 
 from .store import Store
 from .tools import bp_stats
-from .ui import CSS, esc, layout  # noqa: F401  (layout is re-exported for the web app)
+from .ui import CSS, MODES, PALETTES, esc, layout  # noqa: F401  (layout is re-exported for the web app)
 
 DEFAULT_GOALS = {"steps_goal": 8000, "sleep_goal": 7.5}
 HOME_BP_HIGH = (135, 85)       # NHS home-reading threshold
@@ -151,7 +151,7 @@ def log_page(store: Store, csrf: str, tab: str = "meal") -> str:
 
 
 def login_page(message: str = "") -> str:
-    return (f'<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" '
+    return (f'<!doctype html><html lang="en-GB" data-mode="auto" data-palette="tide"><head><meta charset="utf-8"><meta name="viewport" '
             f'content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Wellness</title>'
             f'<style>{CSS}</style></head><body style="padding-bottom:0"><main class="page" style="padding-top:12vh">'
             f'<h1>Wellness</h1><p class="lede">Your health at a glance, for you and Shivani.</p>'
@@ -250,8 +250,19 @@ def settings_page(store: Store, csrf: str, ntfy_base: str) -> str:
            f'<b>{esc(topic)}</b> (server {esc(ntfy_base)}). Anyone who knows the topic name can read the '
            f'reminders, so the messages never include health data.</p>' if topic else
            '<p class="m">Saving with reminders on will create a private topic name for you.</p>')
+    mode_now, palette_now = store.get_setting("mode") or "auto", store.get_setting("palette") or "tide"
+    appearance = (
+        f'<div class="card"><h2>Appearance</h2><form method="post" action="/settings/appearance">{tok}'
+        '<label>Light or dark</label><div class="opts" role="radiogroup" aria-label="Light or dark">'
+        + "".join(f'<label class="opt"><input type="radio" name="mode" value="{k}"{" checked" if k == mode_now else ""}><span>{esc(n)}</span></label>'
+                  for k, n in MODES.items())
+        + '</div><label>Colour theme</label><div class="opts" role="radiogroup" aria-label="Colour theme">'
+        + "".join(f'<label class="opt"><input type="radio" name="palette" value="{k}"{" checked" if k == palette_now else ""}>'
+                  f'<span><i style="--sw:{v[1]}"></i>{esc(v[0])}</span></label>' for k, v in PALETTES.items())
+        + '</div><button class="go">Save appearance</button></form></div>')
     return (
         '<h1>Settings</h1>'
+        + appearance +
         f'<div class="card"><h2>Daily goals</h2><form method="post" action="/settings/goals">{tok}'
         '<div class="row" style="grid-template-columns:1fr 1fr"><div><label>Steps a day</label>'
         f'<input name="steps_goal" type="number" inputmode="numeric" min="1000" max="50000" step="100" value="{g["steps_goal"]:.0f}" required></div>'
