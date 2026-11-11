@@ -7,6 +7,7 @@ services:
     env_file: .env
     ports:
       - "9102:8000"          # point the reverse proxy at this port
+      - "9103:8001"          # wellness web app (only used when WEB_PUBLIC_URL is set)
     volumes:
       - ./data:/data         # must be writable by uid 1000: chown 1000:1000 data
     read_only: true

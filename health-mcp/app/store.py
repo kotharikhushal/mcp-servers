@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS active_calories(
 CREATE TABLE IF NOT EXISTS total_calories(
   id INTEGER PRIMARY KEY, start_time TEXT NOT NULL, end_time TEXT NOT NULL, kcal REAL NOT NULL,
   UNIQUE(start_time, end_time, kcal));
+CREATE TABLE IF NOT EXISTS fasting(day TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS sync_log(
   id INTEGER PRIMARY KEY, received_at TEXT NOT NULL, app_version TEXT, counts TEXT NOT NULL);
 """
@@ -426,6 +427,18 @@ class Store:
                 raise ValueError("An identical weigh-in at this time already exists")
             rid = cur.lastrowid
         return {"id": rid, "time": self.local_str(ts), "kg": round(kg, 2)}
+
+    def set_fasting(self, day: date, fasting: bool) -> None:
+        with self._lock, self._conn:
+            if fasting:
+                self._conn.execute("INSERT OR IGNORE INTO fasting(day) VALUES(?)", (day.isoformat(),))
+            else:
+                self._conn.execute("DELETE FROM fasting WHERE day=?", (day.isoformat(),))
+
+    def fasting_days(self, days: int) -> set[date]:
+        dates, _ = self.window(days)
+        rows = self._rows("SELECT day FROM fasting WHERE day>=?", (dates[0].isoformat(),))
+        return {date.fromisoformat(r["day"]) for r in rows}
 
     def delete_manual(self, kind: str, entry_id: int) -> bool:
         if kind not in MANUAL_KINDS:

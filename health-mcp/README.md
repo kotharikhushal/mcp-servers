@@ -56,6 +56,39 @@ the app's test button: it inserts sample records. If `?key=` in the URL is the o
 set `ALLOW_QUERY_KEY=true` (weaker: the key then appears in proxy logs).
 Each sync logs the types it contained, plus any top-level key the server does not recognise.
 
+## Wellness web app (optional)
+A small web app for blood pressure, a daily coach page and quick logging, for one or more people. Each person
+gets their own database, and signs in with their own Authelia account. It stays off until `WEB_PUBLIC_URL` is set.
+
+Add to `.env`:
+
+    WEB_PUBLIC_URL=https://wellness.example.com
+    WEB_OIDC_CLIENT_ID=wellness-web
+    WEB_OIDC_CLIENT_SECRET=<openssl rand -hex 32>
+    WEB_SESSION_SECRET=<openssl rand -hex 32>
+    WEB_USERS=khushal:Khushal,shivani:Shivani     # Authelia usernames (lower case) : display name
+    WEB_DEFAULT_USER=khushal                      # keeps using the existing health.db; others get users/<name>.db
+
+`OIDC_ISSUER` is shared with the MCP setup. Then `docker compose up -d` (the compose file publishes the app on port 9103).
+
+Pangolin: a second public resource `wellness.example.com` to `http://<unraid-ip>:9103`, with the proxy's own SSO **off**
+(the app does the login itself). Authelia client:
+```yaml
+      - client_id: 'wellness-web'
+        client_name: 'Wellness'
+        client_secret: '<pbkdf2 digest of WEB_OIDC_CLIENT_SECRET>'
+        public: false
+        authorization_policy: 'one_factor'
+        consent_mode: 'implicit'
+        redirect_uris: ['https://wellness.example.com/callback']
+        scopes: ['openid', 'profile']
+        response_types: ['code']
+        grant_types: ['authorization_code']
+        token_endpoint_auth_method: 'client_secret_post'
+        pkce_challenge_method: 'S256'
+```
+A person not listed in `WEB_USERS` is refused even if Authelia lets them sign in.
+
 ## Development
     pip install -r requirements.txt -r requirements-dev.txt
     pytest tests && python tests/e2e.py
