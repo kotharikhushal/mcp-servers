@@ -569,7 +569,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
     ])
 
 
-def build(env: Mapping[str, str], primary: Store | None = None) -> Starlette | None:
+def build(env: Mapping[str, str], primary: Store | None = None, stores: Stores | None = None) -> Starlette | None:
     """The web app, or None when WEB_PUBLIC_URL is not set (the feature is opt-in)."""
     if not (env.get("WEB_PUBLIC_URL") or "").strip():
         return None
@@ -583,7 +583,7 @@ def build(env: Mapping[str, str], primary: Store | None = None) -> Starlette | N
         raise WebConfigError("OIDC_ISSUER and WEB_OIDC_CLIENT_ID are required for the web app")
     verifier = OIDCVerifier(issuer, client_id, client_id=client_id,
                             client_secret=env.get("WEB_OIDC_CLIENT_SECRET") or None)
-    stores = Stores(env.get("DATA_DIR", "/data"), default, env.get("TZ_NAME", "Europe/London"), primary)
+    stores = stores or Stores(env.get("DATA_DIR", "/data"), default, env.get("TZ_NAME", "Europe/London"), primary)
     mealie_url, mealie_token = (env.get("MEALIE_URL") or "").strip(), (env.get("MEALIE_API_TOKEN") or "").strip()
     client = mealie_mod.Mealie(mealie_url, mealie_token) if mealie_url and mealie_token else None
     app = create_app(env, stores, users, verifier, mealie=client)

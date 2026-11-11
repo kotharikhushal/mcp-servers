@@ -63,3 +63,46 @@ def test_oversized_payload_rejected(tmp_path, monkeypatch):
     c, _ = client(tmp_path)
     r = c.post("/ingest", content=b"{" + b" " * 500 + b"}", headers={**GOOD, "content-type": "application/json"})
     assert r.status_code == 413
+
+
+def test_each_person_reaches_only_their_own_data(tmp_path, monkeypatch):
+    from mcp.server.auth.provider import AccessToken
+    from app import server, web
+    k = server.Store(str(tmp_path / "health.db"), tz="Europe/London")
+    stores = web.Stores(str(tmp_path), "khushal", "Europe/London", k)
+    stores.get("shivani").log_weight(60.0, None)
+    k.log_weight(76.0, None)
+    links = server.parse_mcp_users("khushal:K-SUB|khushal@example.com, shivani:S-SUB")
+    assert links == {"k-sub": "khushal", "khushal@example.com": "khushal", "s-sub": "shivani"}
+    ps = server.PersonStore(stores, links)
+    who = {"v": None}
+    monkeypatch.setattr(server, "get_access_token", lambda: who["v"])
+    who["v"] = AccessToken(token="t", client_id="c", scopes=[], subject="S-SUB", claims={"sub": "S-SUB"})
+    assert ps.weight_readings(1)[0]["kg"] == 60.0
+    who["v"] = AccessToken(token="t", client_id="c", scopes=[], subject="uuid-1", claims={"email": "Khushal@example.com"})
+    assert ps.weight_readings(1)[0]["kg"] == 76.0
+    who["v"] = AccessToken(token="t", client_id="c", scopes=[], subject="stranger", claims={})
+    with pytest.raises(server.PersonRequired) as e:
+        ps.weight_readings(1)
+    assert "stranger" in str(e.value) and "MCP_USERS" in str(e.value)
+    assert server.PersonStore(stores, {}).weight_readings(1)[0]["kg"] == 76.0   # unset: default person, as before
+    with pytest.raises(server.ConfigError):
+        server.parse_mcp_users("shivani")
+
+
+def test_tools_take_a_person_so_two_people_can_share_one_claude_account(tmp_path):
+    import asyncio
+    from tests.test_mealie import BASE, call
+    mcp, k, _ = server.create(dict(BASE, DATA_DIR=str(tmp_path), WEB_USERS="khushal:Khushal,shivani:Shivani"))
+    tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
+    assert "person" in tools["get_weight"].inputSchema["properties"] and "person" in tools["log_meal"].inputSchema["properties"]
+    call(mcp, "log_weight", kg=76.0)
+    call(mcp, "log_weight", kg=60.5, person="Shivani")
+    assert call(mcp, "get_weight", days=7)["readings"][0]["kg"] == 76.0
+    assert call(mcp, "get_weight", days=7, person="shivani")["readings"][0]["kg"] == 60.5
+    asyncio.run(mcp.call_tool("log_meal", {"name": "Toast", "kcal": 200, "person": "shivani"}))
+    assert call(mcp, "get_food_log", days=1)["days"] == []
+    assert call(mcp, "get_food_log", days=1, person="shivani")["days"][0]["meals"][0]["name"] == "Toast"
+    with pytest.raises(Exception) as e:
+        call(mcp, "get_weight", days=7, person="stranger")
+    assert "Use one of: khushal, shivani" in str(e.value)

@@ -38,6 +38,9 @@ def _aud_list(aud: Any) -> list[str]:
     return []
 
 
+IDENTITY_CLAIMS = ("sub", "username", "preferred_username", "email")
+
+
 class OIDCVerifier:
     def __init__(self, issuer: str, audience: str, *, client_id: str | None = None,
                  client_secret: str | None = None, jwks_uri: str | None = None,
@@ -116,7 +119,8 @@ class OIDCVerifier:
         scopes = scope.split() if isinstance(scope, str) else list(scope or [])
         exp = claims.get("exp")
         return AccessToken(token=token, client_id=str(claims.get("client_id") or claims.get("azp") or sub),
-                           scopes=scopes, expires_at=int(exp) if exp else None, subject=sub or None)
+                           scopes=scopes, expires_at=int(exp) if exp else None, subject=sub or None,
+                           claims={k: claims[k] for k in IDENTITY_CLAIMS if isinstance(claims.get(k), str)})
 
     async def claims_from_jwt(self, token: str) -> dict[str, Any] | None:
         """Verified claims of a signed JWT (signature, exp, nbf, iss, aud), or None."""
