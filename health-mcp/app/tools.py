@@ -242,3 +242,52 @@ def register(mcp: FastMCP, store: Store) -> None:
         (kind is 'blood_pressure', 'nutrition' or 'weight'; entry_id comes from the get_* tools). Synced data
         cannot be deleted. Confirm with the user first."""
         return {"deleted": store.delete_manual(kind, entry_id)}
+
+    @mcp.tool(annotations=READ)
+    def get_settings() -> dict[str, Any]:
+        """The user's goals (daily steps, sleep hours), fasting days in the last 30 days and the GP note saved
+        in the app."""
+        from .pages import goals
+        g = goals(store)
+        return {"steps_goal": int(g["steps_goal"]), "sleep_goal_hours": g["sleep_goal"],
+                "fasting_days_last_30": sorted(d.isoformat() for d in store.fasting_days(30)),
+                "gp_note": store.get_setting("gp_context") or None}
+
+    @mcp.tool(annotations=WRITE)
+    def set_goals(steps_goal: int | None = None, sleep_goal_hours: float | None = None) -> dict[str, Any]:
+        """Change the daily step goal (1,000 to 50,000) and/or the sleep goal (4 to 12 hours). Only when the user
+        asked for the new value."""
+        if steps_goal is not None and not 1000 <= steps_goal <= 50000:
+            return {"error": "steps_goal must be between 1,000 and 50,000"}
+        if sleep_goal_hours is not None and not 4 <= sleep_goal_hours <= 12:
+            return {"error": "sleep_goal_hours must be between 4 and 12"}
+        if steps_goal is not None:
+            store.set_setting("steps_goal", str(int(steps_goal)))
+        if sleep_goal_hours is not None:
+            store.set_setting("sleep_goal", f"{sleep_goal_hours:g}")
+        return get_settings()
+
+    @mcp.tool(annotations=WRITE)
+    def set_fasting_days(dates: list[str], fasting: bool = True) -> dict[str, Any]:
+        """Mark days (ISO dates, up to 60) as fasting days, or clear them with fasting=false. The app and
+        meal plan use this to explain low-calorie days."""
+        from datetime import date as _date
+        if not 0 < len(dates) <= 60:
+            return {"error": "Send between 1 and 60 dates."}
+        try:
+            days = [_date.fromisoformat(d) for d in dates]
+        except ValueError:
+            return {"error": "Dates must be ISO dates such as 2026-11-12"}
+        for d in days:
+            store.set_fasting(d, fasting)
+        return {"updated": len(days), "fasting": fasting}
+
+    @mcp.tool(annotations=WRITE)
+    def set_gp_note(text: str | None) -> dict[str, Any]:
+        """Save (or clear with null) the context note shown at the top of the GP report, for example medication
+        start dates. Only text the user gave."""
+        text = (text or "").strip()
+        if len(text) > 600:
+            return {"error": "Keep the note under 600 characters."}
+        store.set_setting("gp_context", text or None)
+        return {"saved": bool(text)}
