@@ -67,6 +67,20 @@ def summarise_recipe(r: Mapping[str, Any]) -> dict[str, Any]:
             "total_time": r.get("totalTime"), "rating": r.get("rating"), "tags": tag_names(r)}
 
 
+def log_recipe_nutrition(store: Any, rec: Mapping[str, Any], servings: float, when: Any) -> dict[str, Any]:
+    """Write one recipe's own nutrition (times servings) to the food log. rec comes from Mealie.recipe."""
+    n = rec.get("nutrition_per_serving") or {}
+    if "kcal" not in n:
+        return {"logged": False, "reason": "This recipe has no calories filled in in Mealie. Estimate and use log_meal."}
+
+    def scaled(k: str) -> float | None:
+        return round(n[k] * servings, 2) if k in n else None
+    name = f'{rec["name"]} x{servings:g} (from Mealie)'
+    saved = store.log_meal(name, round(n["kcal"] * servings), scaled("protein_g"), scaled("carbs_g"), scaled("fat_g"),
+                           scaled("fibre_g"), scaled("sugar_g"), scaled("salt_g"), when)
+    return {"logged": True, **saved}
+
+
 class Mealie:
     def __init__(self, base_url: str, token: str, client: httpx.Client | None = None) -> None:
         self.base = base_url.rstrip("/")
@@ -474,6 +488,18 @@ class Mealie:
                         "recipe": rec.get("name") or e.get("title"), "slug": rec.get("slug"), "note": e.get("text") or None})
         return sorted(out, key=lambda x: (x["date"] or "", ENTRY_TYPES.index(x["meal"]) if x["meal"] in ENTRY_TYPES else 9))
 
+    def day_menu(self, day: date) -> list[dict[str, Any]]:
+        """What is planned for one day, with each recipe's nutrition per serving (for the wellness app)."""
+        out, cache = [], {}
+        for e in self.plan(1, day):
+            if not e["slug"]:
+                out.append({**e, "per_serving": None})
+                continue
+            rec = cache.setdefault(e["slug"], self.recipe(e["slug"]))
+            out.append({**e, "recipe_name": rec["name"], "per_serving": rec.get("nutrition_per_serving") or None,
+                        "_rec": rec})
+        return out
+
     def add_to_plan(self, day: date, meal: str, slug: str | None, title: str | None) -> dict[str, Any]:
         if meal not in ENTRY_TYPES:
             raise MealieError(f"meal must be one of {', '.join(ENTRY_TYPES)}.")
@@ -622,16 +648,7 @@ def register(mcp: Any, store: Any, mealie: Mealie, parse_when: Any, read: Any, w
             rec = mealie.recipe(slug)
         except MealieError as e:
             return {"error": str(e)}
-        n = rec.get("nutrition_per_serving") or {}
-        if "kcal" not in n:
-            return {"logged": False, "reason": "This recipe has no calories filled in in Mealie. Estimate and use log_meal."}
-
-        def scaled(k: str) -> float | None:
-            return round(n[k] * servings, 2) if k in n else None
-        name = f'{rec["name"]} x{servings:g} (from Mealie)'
-        saved = store.log_meal(name, round(n["kcal"] * servings), scaled("protein_g"), scaled("carbs_g"), scaled("fat_g"),
-                               scaled("fibre_g"), scaled("sugar_g"), scaled("salt_g"), parse_when(store, when))
-        return {"logged": True, **saved}
+        return log_recipe_nutrition(store, rec, servings, parse_when(store, when))
 
     @mcp.tool(annotations=write)
     def log_recipe_as_meal(slug: str, servings: float = 1.0, when: str | None = None) -> dict[str, Any]:

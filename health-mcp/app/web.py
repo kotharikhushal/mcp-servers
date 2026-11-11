@@ -28,7 +28,7 @@ from starlette.routing import Route
 
 from pathlib import Path
 
-from . import apple, pages, reminders, views
+from . import apple, mealie as mealie_mod, pages, reminders, views
 from .auth import OIDCVerifier
 from .store import Store
 from .tools import _parse_when
@@ -128,7 +128,7 @@ class Stores:
 
 def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
                verifier: OIDCVerifier, http: httpx.AsyncClient | None = None,
-               notify: reminders.Notifier | None = None) -> Starlette:
+               notify: reminders.Notifier | None = None, mealie: Any = None) -> Starlette:
     public = (env.get("WEB_PUBLIC_URL") or "").rstrip("/")
     p = urlparse(public)
     if p.scheme != "https" or not p.netloc:
@@ -199,8 +199,80 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
                                          flash=flash[:200], flash_err=bool(request.query_params.get("err")),
                                          back=back, tint=tint))
 
+    menu_cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
+
+    def load_menu(store: Store, user: str) -> list[dict[str, Any]]:
+        """Today's Mealie plan (cached for 30 seconds so the home screen stays quick)."""
+        day = store.local(store.now()).date()
+        hit = menu_cache.get((user, day.isoformat()))
+        if hit and time.monotonic() - hit[0] < 30:
+            return hit[1]
+        menu = mealie.day_menu(day)
+        menu_cache[(user, day.isoformat())] = (time.monotonic(), menu)
+        return menu
+
     async def today(request: Request, s: dict[str, Any], store: Store) -> Response:
-        return page("Today", views.today_page(store, users[s["u"]]), s, "/", request)
+        menu, err = None, False
+        if mealie is not None:
+            try:
+                menu = await asyncio.to_thread(load_menu, store, s["u"])
+            except mealie_mod.MealieError:
+                err = True
+        return page("Today", views.today_page(store, users[s["u"]], menu, err, s["csrf"]), s, "/", request)
+
+    async def meals_eat(request: Request, s: dict[str, Any], store: Store) -> Response:
+        if mealie is None:
+            return back("Meal plan is not connected", True, "/")
+        eid = str(request.state.form.get("entry_id", ""))
+        try:
+            menu = await asyncio.to_thread(load_menu, store, s["u"])
+        except mealie_mod.MealieError as e:
+            return back(str(e), True, "/")
+        m = next((x for x in menu if str(x["id"]) == eid), None)
+        if not m or not m.get("_rec"):
+            return back("That meal is no longer in today's plan", True, "/")
+        name = m["_rec"]["name"]
+        if any(e["name"].startswith(f"{name} x") for e in store.food_entries(1)
+               if e["_day"] == store.local(store.now()).date()):
+            return back(f"{name} is already logged", False, "/")
+        res = await asyncio.to_thread(mealie_mod.log_recipe_nutrition, store, m["_rec"], 1.0, None)
+        if not res.get("logged"):
+            return back(res.get("reason", "Could not log that meal"), True, "/")
+        return back(f'Logged {name}, {res["kcal"]} kcal', False, "/")
+
+    async def meals_skip(request: Request, s: dict[str, Any], store: Store) -> Response:
+        f = request.state.form
+        eid = str(f.get("entry_id", ""))
+        if not eid.replace("-", "").replace("_", "").isalnum():
+            return back("Bad meal", True, "/")
+        key = f"skip:{store.local(store.now()).date().isoformat()}"
+        cur = {x for x in (store.get_setting(key) or "").split(",") if x}
+        if str(f.get("on")) == "0":
+            cur.discard(eid)
+        else:
+            cur.add(eid)
+        store.set_setting(key, ",".join(sorted(cur)) or None)
+        return back("Skipped" if str(f.get("on")) != "0" else "Skip removed", False, "/")
+
+    async def fasting_days_post(request: Request, s: dict[str, Any], store: Store) -> Response:
+        vals = request.state.form.getlist("wd") if hasattr(request.state.form, "getlist") else []
+        store.set_fasting_weekdays({int(v) for v in vals if str(v).isdigit() and 0 <= int(v) <= 6})
+        return back("Fasting days saved", False, "/settings")
+
+    async def goal_weight(request: Request, s: dict[str, Any], store: Store) -> Response:
+        raw = str(request.state.form.get("goal_weight", "")).strip()
+        if not raw:
+            store.set_setting("goal_weight", None)
+            return back("Goal weight removed", False, "/weight")
+        lo, hi = pages.NUTRITION_GOALS["goal_weight"]
+        try:
+            v = float(raw)
+        except ValueError:
+            return back("Goal weight must be a number", True, "/weight")
+        if not lo <= v <= hi:
+            return back(f"Goal weight must be between {lo} and {hi} kg", True, "/weight")
+        store.set_setting("goal_weight", f"{v:g}")
+        return back(f"Goal weight set to {v:g} kg", False, "/weight")
 
     def detail(title: str, path: str, tint: str, render: Callable[[Store, str, int], str], default: int = 7):
         async def handler(request: Request, s: dict[str, Any], store: Store) -> Response:
@@ -463,6 +535,10 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         Route("/log/meal", authed(log_meal, post=True), methods=["POST"]),
         Route("/log/fasting", authed(log_fasting, post=True), methods=["POST"]),
         Route("/log/delete", authed(log_delete, post=True), methods=["POST"]),
+        Route("/settings/fasting-days", authed(fasting_days_post, post=True), methods=["POST"]),
+        Route("/meals/eat", authed(meals_eat, post=True), methods=["POST"]),
+        Route("/meals/skip", authed(meals_skip, post=True), methods=["POST"]),
+        Route("/settings/goal-weight", authed(goal_weight, post=True), methods=["POST"]),
         Route("/logout", authed(logout, post=True), methods=["POST"]),
         Route("/login", login), Route("/callback", callback), Route("/healthz", healthz),
     ])
@@ -483,7 +559,9 @@ def build(env: Mapping[str, str], primary: Store | None = None) -> Starlette | N
     verifier = OIDCVerifier(issuer, client_id, client_id=client_id,
                             client_secret=env.get("WEB_OIDC_CLIENT_SECRET") or None)
     stores = Stores(env.get("DATA_DIR", "/data"), default, env.get("TZ_NAME", "Europe/London"), primary)
-    app = create_app(env, stores, users, verifier)
+    mealie_url, mealie_token = (env.get("MEALIE_URL") or "").strip(), (env.get("MEALIE_API_TOKEN") or "").strip()
+    client = mealie_mod.Mealie(mealie_url, mealie_token) if mealie_url and mealie_token else None
+    app = create_app(env, stores, users, verifier, mealie=client)
     app.state.stores, app.state.users = stores, users
     app.state.ntfy_base = (env.get("NTFY_BASE") or "https://ntfy.sh").rstrip("/")
     return app

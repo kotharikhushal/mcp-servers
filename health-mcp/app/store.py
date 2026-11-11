@@ -458,17 +458,33 @@ class Store:
                 n += 1
         return n
 
+    def fasting_weekdays(self) -> set[int]:
+        """Weekdays (Monday is 0) that repeat as fasting days every week."""
+        return {int(x) for x in (self.get_setting("fasting_weekdays") or "").split(",") if x.strip().isdigit() and 0 <= int(x) <= 6}
+
+    def set_fasting_weekdays(self, weekdays: set[int]) -> None:
+        self.set_setting("fasting_weekdays", ",".join(str(x) for x in sorted(weekdays)) or None)
+
     def set_fasting(self, day: date, fasting: bool) -> None:
         with self._lock, self._conn:
             if fasting:
                 self._conn.execute("INSERT OR IGNORE INTO fasting(day) VALUES(?)", (day.isoformat(),))
+                self._conn.execute("DELETE FROM settings WHERE key=?", (f"nofast:{day.isoformat()}",))
             else:
                 self._conn.execute("DELETE FROM fasting WHERE day=?", (day.isoformat(),))
+                if day.weekday() in self.fasting_weekdays():  # one-off exception to the weekly pattern
+                    self._conn.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                                       (f"nofast:{day.isoformat()}", "1"))
 
     def fasting_days(self, days: int) -> set[date]:
         dates, _ = self.window(days)
         rows = self._rows("SELECT day FROM fasting WHERE day>=?", (dates[0].isoformat(),))
-        return {date.fromisoformat(r["day"]) for r in rows}
+        out = {date.fromisoformat(r["day"]) for r in rows}
+        wd = self.fasting_weekdays()
+        if wd:
+            skipped = {r["key"][7:] for r in self._rows("SELECT key FROM settings WHERE key LIKE 'nofast:%'")}
+            out |= {d for d in dates if d.weekday() in wd and d.isoformat() not in skipped}
+        return out
 
     def delete_manual(self, kind: str, entry_id: int) -> bool:
         if kind not in MANUAL_KINDS:

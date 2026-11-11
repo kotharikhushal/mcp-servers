@@ -102,8 +102,22 @@ def log_page(store: Store, csrf: str) -> str:
         f'<td><form method="post" action="/log/delete" style="margin:0">{tok}'
         f'<input type="hidden" name="kind" value="nutrition"><input type="hidden" name="id" value="{e["id"]}">'
         f'<button class="link">Delete</button></form></td></tr>' for e in reversed(meals))
+    seen: dict[str, dict] = {}
+    for e in reversed(store.food_entries(30)):
+        base = e["name"].split(" x")[0] if e["name"].endswith("(from Mealie)") else e["name"]
+        seen.setdefault(base.lower(), e)
+    again = "".join(
+        f'<li><div class="l"><b>{esc(e["name"].replace(" (from Mealie)", ""))}</b><span>{e["kcal"]} kcal</span></div>'
+        f'<form method="post" action="/log/meal" style="margin:0">{tok}<input type="hidden" name="name" value="{esc(e["name"])}">'
+        f'<input type="hidden" name="kcal" value="{e["kcal"]}">'
+        f'<input type="hidden" name="protein" value="{e["protein_g"] if e["protein_g"] is not None else ""}">'
+        f'<input type="hidden" name="salt" value="{e["salt_g"] if e["salt_g"] is not None else ""}">'
+        f'<button class="mini ghost" aria-label="Log {esc(e["name"])} again">Log again</button></form></li>'
+        for e in list(seen.values())[:6])
+    again_card = (f'<div class="card"><h2>Recent meals</h2><ul class="rows">{again}</ul></div>' if again else "")
     return (
         '<h1>Quick log</h1>'
+        f'{again_card}'
         f'<div class="card"><h2>Blood pressure</h2><form method="post" action="/log/bp">{tok}'
         '<div class="row"><div><label>Systolic</label><input name="systolic" type="number" inputmode="numeric" required></div>'
         '<div><label>Diastolic</label><input name="diastolic" type="number" inputmode="numeric" required></div>'
@@ -242,6 +256,12 @@ def settings_page(store: Store, csrf: str, ntfy_base: str) -> str:
         '<label>Goal weight (kg)</label>'
         f'<input name="goal_weight" type="number" inputmode="decimal" min="40" max="200" step="0.5" value="{nv("goal_weight")}" placeholder="optional">'
         '<button class="go">Save goals</button></form></div>'
+        f'<div class="card"><h2>Fasting days</h2><form method="post" action="/settings/fasting-days">{tok}'
+        '<p class="m" style="margin:0 0 6px">Days that repeat every week. You can still unmark a single day on the Log page.</p>'
+        + "".join(f'<label style="display:inline-flex;align-items:center;margin:4px 14px 4px 0"><input type="checkbox" name="wd" value="{i}"'
+                  f'{" checked" if i in store.fasting_weekdays() else ""}>{n}</label>'
+                  for i, n in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")))
+        + '<button class="go">Save fasting days</button></form></div>'
         f'<div class="card"><h2>Blood pressure reminders</h2><form method="post" action="/settings/reminders">{tok}'
         f'<label><input type="checkbox" name="enabled" value="1" style="width:auto"{" checked" if on else ""}> '
         'Send me reminders</label>'

@@ -467,3 +467,80 @@ def test_delete_needs_a_second_tap(env):
     stores.get("khushal").log_meal("Toast", 200, 6, None, None, None, None, 0.2, None)
     page = c.get("/food").text
     assert "Delete this entry?" in page and "Yes, delete" in page
+
+
+class StubMealie:
+    def __init__(self, fail=False):
+        self.fail = fail
+
+    def day_menu(self, day):
+        from app.mealie import MealieError
+        if self.fail:
+            raise MealieError("down")
+        rec = {"name": "Dal and rice", "nutrition_per_serving": {"kcal": 620, "protein_g": 24}}
+        return [{"id": "e1", "meal": "dinner", "recipe": "Dal and rice", "recipe_name": "Dal and rice", "slug": "dal",
+                 "per_serving": rec["nutrition_per_serving"], "_rec": rec, "note": None}]
+
+
+def mealie_env(tmp_path, stub):
+    ver = FakeVerifier()
+    stores = web.Stores(str(tmp_path), "khushal", "Europe/London")
+    app = web.create_app(ENV, stores, USERS, ver, mealie=stub,
+                         http=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))))
+    return signed_in(TestClient(app, base_url=BASE, follow_redirects=False)), stores
+
+
+def test_todays_planned_meals_can_be_logged_in_one_tap_and_skipped(tmp_path):
+    c, stores = mealie_env(tmp_path, StubMealie())
+    home = c.get("/").text
+    assert "Today's meals" in home and "Dal and rice" in home and "620 kcal" in home and "I ate this" in home
+    r = c.post("/meals/eat", data={"csrf": "tok", "entry_id": "e1"})
+    assert "ok=" in r.headers["location"]
+    k = stores.get("khushal")
+    assert [e["name"] for e in k.food_entries(1)] == ["Dal and rice x1 (from Mealie)"] and k.food_entries(1)[0]["kcal"] == 620
+    c.post("/meals/eat", data={"csrf": "tok", "entry_id": "e1"})   # a second tap must not log it twice
+    assert len(k.food_entries(1)) == 1 and "Logged" in c.get("/").text
+    assert "err=" in c.post("/meals/eat", data={"csrf": "tok", "entry_id": "nope"}).headers["location"]
+    c.post("/meals/skip", data={"csrf": "tok", "entry_id": "e2", "on": "1"})
+    assert k.get_setting(f"skip:{k.local(k.now()).date().isoformat()}") == "e2"
+    c.post("/meals/skip", data={"csrf": "tok", "entry_id": "e2", "on": "0"})
+    assert k.get_setting(f"skip:{k.local(k.now()).date().isoformat()}") is None
+    assert c.post("/meals/eat", data={"entry_id": "e1"}).status_code in (400, 403)  # no CSRF token
+
+
+def test_home_still_loads_when_the_meal_plan_is_unreachable(tmp_path):
+    c, _ = mealie_env(tmp_path, StubMealie(fail=True))
+    r = c.get("/")
+    assert r.status_code == 200 and "Meal plan unavailable" in r.text
+
+
+def test_goal_weight_can_be_changed_from_the_weight_page(env):
+    c, stores, _ = env
+    signed_in(c)
+    k = stores.get("khushal")
+    k.log_weight(74.5, datetime.now(timezone.utc))
+    assert 'action="/settings/goal-weight"' in c.get("/weight").text
+    assert "ok=" in c.post("/settings/goal-weight", data={"csrf": "tok", "goal_weight": "69.5"}).headers["location"]
+    assert k.get_setting("goal_weight") == "69.5" and 'value="69.5"' in c.get("/weight").text
+    assert "err=" in c.post("/settings/goal-weight", data={"csrf": "tok", "goal_weight": "5"}).headers["location"]
+    c.post("/settings/goal-weight", data={"csrf": "tok", "goal_weight": ""})
+    assert k.get_setting("goal_weight") is None
+
+
+def test_weekly_fasting_days_and_log_again(env):
+    c, stores, _ = env
+    signed_in(c)
+    k = stores.get("khushal")
+    today = k.local(k.now()).date()
+    assert "ok=" in c.post("/settings/fasting-days", data={"csrf": "tok", "wd": [str(today.weekday())]}).headers["location"]
+    assert today in k.fasting_days(1)
+    c.post("/log/fasting", data={"csrf": "tok", "on": "0"})          # one-off exception
+    assert today not in k.fasting_days(1)
+    c.post("/log/fasting", data={"csrf": "tok", "on": "1"})
+    assert today in k.fasting_days(1)
+    c.post("/settings/fasting-days", data={"csrf": "tok"})
+    c.post("/log/fasting", data={"csrf": "tok", "on": "0"})
+    assert k.fasting_weekdays() == set() and today not in k.fasting_days(1)
+    k.log_meal("Greek yoghurt", 150, 15, None, None, None, None, 0.2, None)
+    log = c.get("/log").text
+    assert "Recent meals" in log and "Log again" in log
