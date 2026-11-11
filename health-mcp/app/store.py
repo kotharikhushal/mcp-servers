@@ -111,7 +111,16 @@ def _opt(value: Any, hi: float = 1e6) -> float | None:
     return _num(value, 0, hi)
 
 
+# Health Connect SleepSessionRecord.Stage codes. The sync app may send the raw number.
+STAGE_CODES = {0: "unknown", 1: "awake", 2: "asleep", 3: "awake", 4: "light",
+               5: "deep", 6: "rem", 7: "awake"}
+
+
 def normalise_stage(name: Any) -> str:
+    if isinstance(name, bool):
+        return "unknown"
+    if isinstance(name, (int, float)) or (isinstance(name, str) and name.strip().isdigit()):
+        return STAGE_CODES.get(int(float(name)), "unknown")
     s = str(name or "").lower()
     if "deep" in s:
         return "deep"
@@ -273,9 +282,12 @@ class Store:
                         secs = (s1 - s0).total_seconds()
                     if secs is None:
                         continue
-                    stages.append({"stage": normalise_stage(s.get("stage")),
-                                   "seconds": int(secs),
-                                   "start": iso(s0) if s0 else None})
+                    entry = {"stage": normalise_stage(s.get("stage")),
+                             "seconds": int(secs),
+                             "start": iso(s0) if s0 else None}
+                    if entry["stage"] == "unknown":
+                        entry["raw"] = str(s.get("stage"))[:40]  # keep to diagnose new codes
+                    stages.append(entry)
                 start = end - timedelta(seconds=int(dur))
                 b["stored"] += self._conn.execute(
                     "INSERT INTO sleep(start_time,end_time,duration_seconds,stages) VALUES(?,?,?,?) "

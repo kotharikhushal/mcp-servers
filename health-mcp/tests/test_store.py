@@ -284,3 +284,13 @@ def test_sleep_night_and_nap_are_both_counted():
         {"session_end_time": "2026-11-09T17:42:00Z", "duration_seconds": 4860, "stages": []}]})
     day = s.sleep_by_day(1)[datetime(2026, 11, 9, tzinfo=UTC).date()]
     assert day["sessions"] == 2 and day["asleep_seconds"] == 19920 + 4860
+
+
+def test_sleep_numeric_stage_codes_exclude_awake():
+    s = make(now=datetime(2026, 11, 11, 12, 0, tzinfo=UTC))
+    s.ingest({"sleep": [{"session_end_time": "2026-11-11T09:01:00Z", "duration_seconds": 36060, "stages": [
+        {"stage": 4, "duration_seconds": 20400}, {"stage": 5, "duration_seconds": 5400},
+        {"stage": 6, "duration_seconds": 7860}, {"stage": 1, "duration_seconds": 2400}]}]})
+    day = s.sleep_by_day(1)[datetime(2026, 11, 11, tzinfo=UTC).date()]
+    assert day["stages"]["light"] == 20400 and day["stages"]["rem"] == 7860
+    assert day["awake_seconds"] == 2400 and day["asleep_seconds"] == 33660
