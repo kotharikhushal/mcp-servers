@@ -159,6 +159,9 @@ def start_web(env: Mapping[str, str], store: Store) -> None:
     cfg = uvicorn.Config(app, host=env.get("HOST", "0.0.0.0"), port=int(env.get("WEB_PORT", "8001")),
                          log_level="warning", proxy_headers=True, forwarded_allow_ips="*")
     threading.Thread(target=uvicorn.Server(cfg).run, name="web", daemon=True).start()
+    from . import reminders
+    stores, users = app.state.stores, app.state.users
+    reminders.start(lambda: {u: stores.get(u) for u in users}, reminders.make_notifier(app.state.ntfy_base))
     log.info("web app listening on port %s", cfg.port)
 
 

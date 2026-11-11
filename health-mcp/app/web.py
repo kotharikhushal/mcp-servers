@@ -8,6 +8,7 @@ Safety properties:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -25,12 +26,13 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from . import pages
+from . import apple, pages, reminders
 from .auth import OIDCVerifier
 from .store import Store
 from .tools import _parse_when
 
 log = logging.getLogger("health-mcp.web")
+MAX_UPLOAD = 25 * 1024 * 1024
 SESSION_COOKIE = "wellness_session"
 LOGIN_COOKIE = "wellness_login"
 SESSION_SECONDS = 7 * 86400
@@ -115,7 +117,8 @@ class Stores:
 
 
 def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
-               verifier: OIDCVerifier, http: httpx.AsyncClient | None = None) -> Starlette:
+               verifier: OIDCVerifier, http: httpx.AsyncClient | None = None,
+               notify: reminders.Notifier | None = None) -> Starlette:
     public = (env.get("WEB_PUBLIC_URL") or "").rstrip("/")
     p = urlparse(public)
     if p.scheme != "https" or not p.netloc:
@@ -127,6 +130,8 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
     signer = Signer(env.get("WEB_SESSION_SECRET", ""))
     redirect_uri = f"{public}/callback"
     client = http or httpx.AsyncClient(timeout=10)
+    ntfy_base = (env.get("NTFY_BASE") or "https://ntfy.sh").rstrip("/")
+    send = notify or reminders.make_notifier(ntfy_base)
     allowed_hosts = {p.hostname or "", "localhost", "127.0.0.1", "testserver"}
 
     def headers(resp: Response) -> Response:
@@ -160,6 +165,11 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
                     return headers(Response("sign in required", status_code=401))
                 return headers(RedirectResponse("/login", status_code=303))
             if post:
+                try:
+                    if int(request.headers.get("content-length") or 0) > MAX_UPLOAD + 1024 * 1024:
+                        return headers(Response("too large", status_code=413))
+                except ValueError:
+                    return headers(Response("bad content-length", status_code=400))
                 origin = request.headers.get("origin")
                 if origin and origin != f"{p.scheme}://{p.netloc}":
                     return headers(Response("bad origin", status_code=403))
@@ -184,8 +194,8 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
     async def log_get(request: Request, s: dict[str, Any], store: Store) -> Response:
         return page("Quick log", pages.log_page(store, s["csrf"]), s, "/log", request)
 
-    def back(msg: str, err: bool = False) -> Response:
-        return RedirectResponse("/log?" + urlencode({"err" if err else "ok": msg}), status_code=303)
+    def back(msg: str, err: bool = False, to: str = "/log") -> Response:
+        return RedirectResponse(to + "?" + urlencode({"err" if err else "ok": msg}), status_code=303)
 
     def num(form: Any, key: str, cast: Callable[[str], Any] = float) -> Any:
         v = str(form.get(key, "")).strip()
@@ -235,6 +245,72 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         return RedirectResponse(("/bp" if f.get("kind") == "blood_pressure" else "/log") +
                                 "?" + urlencode({"ok": "Deleted"} if ok else {"err": "Nothing deleted"}),
                                 status_code=303)
+
+
+    async def gp(request: Request, s: dict[str, Any], store: Store) -> Response:
+        try:
+            days = int(request.query_params.get("days", "7"))
+        except ValueError:
+            days = 7
+        return page("GP report", pages.gp_page(store, users[s["u"]], days), s, "/gp", request)
+
+    async def settings_get(request: Request, s: dict[str, Any], store: Store) -> Response:
+        return page("Settings", pages.settings_page(store, s["csrf"], ntfy_base), s, "/settings", request)
+
+    async def settings_reminders(request: Request, s: dict[str, Any], store: Store) -> Response:
+        f = request.state.form
+        times = {}
+        for slot in reminders.SLOTS:
+            v = str(f.get(slot, "")).strip()
+            try:
+                h, m = v.split(":")
+                if not (0 <= int(h) < 24 and 0 <= int(m) < 60):
+                    raise ValueError
+            except ValueError:
+                return back(f"The {slot} time is not valid", True, "/settings")
+            times[slot] = f"{int(h):02d}:{int(m):02d}"
+        on = str(f.get("enabled")) == "1"
+        store.set_setting("reminders_enabled", "1" if on else "0")
+        for slot, v in times.items():
+            store.set_setting(f"reminder_{slot}", v)
+        if on and not store.get_setting("reminder_topic"):
+            store.set_setting("reminder_topic", reminders.new_topic())
+        return back("Reminders saved", False, "/settings")
+
+    async def settings_test(request: Request, s: dict[str, Any], store: Store) -> Response:
+        topic = store.get_setting("reminder_topic")
+        if not topic:
+            return back("Turn reminders on first", True, "/settings")
+        try:
+            await asyncio.to_thread(send, topic, "Wellness", "This is a test reminder. It worked.")
+        except Exception:
+            log.warning("test reminder failed")
+            return back("Could not reach the notification server", True, "/settings")
+        return back("Test sent. Check your phone.", False, "/settings")
+
+    async def settings_context(request: Request, s: dict[str, Any], store: Store) -> Response:
+        text = str(request.state.form.get("context", "")).strip()[:600]
+        store.set_setting("gp_context", text or None)
+        return back("Note saved", False, "/settings")
+
+    async def import_get(request: Request, s: dict[str, Any], store: Store) -> Response:
+        return page("Import", pages.import_page(s["csrf"]), s, "/settings", request)
+
+    async def import_post(request: Request, s: dict[str, Any], store: Store) -> Response:
+        up = request.state.form.get("file")
+        if up is None or not hasattr(up, "read"):
+            return back("Choose a file first", True, "/import")
+        raw = await up.read(MAX_UPLOAD + 1)
+        if len(raw) > MAX_UPLOAD:
+            return back("That file is too large", True, "/import")
+        try:
+            data = apple.load_upload(raw)
+            payload, heart = apple.convert(data, store.tz)
+            counts = await asyncio.to_thread(store.ingest, payload)
+            days = await asyncio.to_thread(store.import_daily_heart, heart)
+        except apple.ImportError_ as e:
+            return back(str(e), True, "/import")
+        return back(apple.summarise(counts, days), False, "/settings")
 
     # ------------------------------------------------------------------ login
     async def login(request: Request) -> Response:
@@ -308,6 +384,11 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
 
     return Starlette(routes=[
         Route("/", authed(today)), Route("/bp", authed(bp)), Route("/log", authed(log_get)),
+        Route("/gp", authed(gp)), Route("/settings", authed(settings_get)), Route("/import", authed(import_get)),
+        Route("/settings/reminders", authed(settings_reminders, post=True), methods=["POST"]),
+        Route("/settings/test", authed(settings_test, post=True), methods=["POST"]),
+        Route("/settings/context", authed(settings_context, post=True), methods=["POST"]),
+        Route("/import", authed(import_post, post=True), methods=["POST"]),
         Route("/log/bp", authed(log_bp, post=True), methods=["POST"]),
         Route("/log/weight", authed(log_weight, post=True), methods=["POST"]),
         Route("/log/meal", authed(log_meal, post=True), methods=["POST"]),
@@ -333,4 +414,7 @@ def build(env: Mapping[str, str], primary: Store | None = None) -> Starlette | N
     verifier = OIDCVerifier(issuer, client_id, client_id=client_id,
                             client_secret=env.get("WEB_OIDC_CLIENT_SECRET") or None)
     stores = Stores(env.get("DATA_DIR", "/data"), default, env.get("TZ_NAME", "Europe/London"), primary)
-    return create_app(env, stores, users, verifier)
+    app = create_app(env, stores, users, verifier)
+    app.state.stores, app.state.users = stores, users
+    app.state.ntfy_base = (env.get("NTFY_BASE") or "https://ntfy.sh").rstrip("/")
+    return app

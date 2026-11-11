@@ -5,7 +5,7 @@ are plain rules over the person's own numbers: data, not diagnosis.
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from html import escape as _esc
 from typing import Any
 
@@ -41,11 +41,12 @@ input{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;back
 button.go{margin-top:12px;padding:10px 18px;border:0;border-radius:10px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
 button.link{border:0;background:none;color:var(--bad);cursor:pointer;font:inherit;padding:0}
 .flash{padding:8px 12px;border-radius:8px;background:var(--soft);margin-bottom:12px}.flash.err{background:#fbe3e0;color:#7a1d16}
-svg{width:100%;height:auto}
+svg{width:100%;height:auto}main a{color:var(--accent)}
 @media print{nav,.noprint{display:none}body{background:#fff;color:#000}.card{border:1px solid #999}}
 """
 
-NAV = (("/", "Today"), ("/bp", "Blood pressure"), ("/log", "Quick log"))
+NAV = (("/", "Today"), ("/bp", "Blood pressure"), ("/log", "Quick log"), ("/gp", "GP report"),
+       ("/settings", "Settings"))
 
 
 def layout(title: str, body: str, *, name: str, active: str, csrf: str, flash: str = "",
@@ -233,3 +234,115 @@ def login_page(message: str = "") -> str:
             f'content="width=device-width,initial-scale=1"><title>Wellness</title><style>{CSS}</style></head>'
             f'<body><main><div class="card"><h1>Wellness</h1>{"<p>" + esc(message) + "</p>" if message else ""}'
             '<p><a href="/login"><button class="go">Sign in</button></a></p></div></main></body></html>')
+
+
+def _avg(vals: list[float]) -> float | None:
+    return round(sum(vals) / len(vals), 1) if vals else None
+
+
+def gp_page(store: Store, name: str, days: int) -> str:
+    """Printable home blood pressure record for a GP appointment."""
+    days = days if days in (7, 14, 28) else 7
+    today = store.local(store.now()).date()
+    first = today - timedelta(days=days - 1)
+    rs = [r for r in store.bp_readings(days) if r["time"][:10] >= first.isoformat()]
+    context = store.get_setting("gp_context") or ""
+    opts = " · ".join(f'<a href="/gp?days={d}"><b>{d} days</b></a>' if d == days else f'<a href="/gp?days={d}">{d} days</a>'
+                      for d in (7, 14, 28))
+    head = (f'<h1>Home blood pressure record</h1>'
+            f'<div class="card"><table><tr><td>Patient</td><td>{esc(name)}</td></tr>'
+            f'<tr><td>Period</td><td>{first.strftime("%-d %b %Y")} to {today.strftime("%-d %b %Y")}</td></tr>'
+            f'<tr><td>Prepared</td><td>{today.strftime("%-d %b %Y")}</td></tr></table>'
+            f'<p class="noprint m">Show: {opts}</p></div>')
+    ctx = (f'<div class="card"><h2>Context</h2><p style="white-space:pre-wrap;margin:0">{esc(context)}</p></div>'
+           if context.strip() else "")
+    if not rs:
+        return head + ctx + '<div class="card">No readings in this period.</div>'
+    st = bp_stats(rs)
+
+    def blk(b: dict[str, Any] | None) -> str:
+        return f'{b["systolic"]:.0f}/{b["diastolic"]:.0f} mmHg ({b["readings"]} readings)' if b else "not enough data"
+
+    hi = max(rs, key=lambda r: (r["systolic"], r["diastolic"]))
+    lo = min(rs, key=lambda r: (r["systolic"], r["diastolic"]))
+    pulse = _avg([float(r["pulse"]) for r in rs if r["pulse"]])
+    summary = (f'<div class="card"><h2>Summary</h2><table>'
+               f'<tr><td>All readings</td><td>{blk(st["average_all"])}</td></tr>'
+               f'<tr><td>Excluding the first day</td><td>{blk(st["average_excluding_first_day"])}</td></tr>'
+               f'<tr><td>Morning readings</td><td>{blk(st["morning_before_noon"])}</td></tr>'
+               f'<tr><td>Evening readings</td><td>{blk(st["evening_noon_onwards"])}</td></tr>'
+               f'<tr><td>Highest</td><td>{hi["systolic"]}/{hi["diastolic"]} ({esc(hi["time"])})</td></tr>'
+               f'<tr><td>Lowest</td><td>{lo["systolic"]}/{lo["diastolic"]} ({esc(lo["time"])})</td></tr>'
+               f'<tr><td>Average pulse</td><td>{esc(pulse if pulse is not None else "not recorded")}</td></tr></table></div>')
+    by_day: dict[str, dict[str, list[str]]] = {}
+    for r in rs:
+        slot = "am" if r["time"][11:13] < "12" else "pm"
+        by_day.setdefault(r["time"][:10], {"am": [], "pm": []})[slot].append(
+            f'{r["systolic"]}/{r["diastolic"]}' + (f' ({r["pulse"]})' if r["pulse"] else ""))
+    full = sum(1 for v in by_day.values() if len(v["am"]) >= 2 and len(v["pm"]) >= 2)
+    rows = "".join(f'<tr><td>{esc(date.fromisoformat(d).strftime("%a %-d %b"))}</td>'
+                   f'<td>{esc(", ".join(v["am"]) or "–")}</td><td>{esc(", ".join(v["pm"]) or "–")}</td></tr>'
+                   for d, v in sorted(by_day.items()))
+    table = (f'<div class="card"><h2>Readings by day</h2><table><tr><th>Day</th><th>Morning (pulse)</th>'
+             f'<th>Evening (pulse)</th></tr>{rows}</table>'
+             f'<p class="m">{len(by_day)} days with readings; {full} with at least two morning and two evening readings. '
+             'The common home-monitoring protocol asks for 4 to 7 days, two readings each morning and evening, '
+             'and discards the first day.</p></div>')
+    sleep = [v["asleep_seconds"] / 3600 for v in store.sleep_by_day(days).values() if v]
+    steps = [v["steps"] for v in store.steps_by_day(days).values() if v["records"]]
+    weights = [w for w in store.weight_readings(days)]
+    life = []
+    if sleep:
+        life.append(f"Average sleep {_avg(sleep)} hours a night")
+    if steps:
+        life.append(f"Average steps {round(sum(steps) / len(steps))} a day")
+    if len(weights) >= 2:
+        life.append(f'Weight {weights[0]["kg"]:.1f} kg to {weights[-1]["kg"]:.1f} kg')
+    lifestyle = ('<div class="card"><h2>Other measures</h2><p style="margin:0">' + esc(" · ".join(life)) + "</p></div>"
+                 if life else "")
+    foot = ('<p class="m">Readings were taken at home by the patient with their own monitor and recorded in the Wellness app. '
+            'This record is for discussion with a clinician and is not a diagnosis. Use your browser’s Print or '
+            'Save as PDF to keep a copy.</p>')
+    return head + ctx + summary + table + lifestyle + foot
+
+
+def settings_page(store: Store, csrf: str, ntfy_base: str) -> str:
+    tok = f'<input type="hidden" name="csrf" value="{esc(csrf)}">'
+    on = store.get_setting("reminders_enabled") == "1"
+    topic = store.get_setting("reminder_topic") or ""
+    am = store.get_setting("reminder_morning") or "08:00"
+    pm = store.get_setting("reminder_evening") or "21:00"
+    ctx = store.get_setting("gp_context") or ""
+    sub = (f'<p class="m">On your phone, install the free <b>ntfy</b> app and subscribe to this topic: '
+           f'<b>{esc(topic)}</b> (server {esc(ntfy_base)}). Anyone who knows the topic name can read the '
+           f'reminders, so the messages never include health data.</p>' if topic else
+           '<p class="m">Saving with reminders on will create a private topic name for you.</p>')
+    return (
+        '<h1>Settings</h1>'
+        f'<div class="card"><h2>Blood pressure reminders</h2><form method="post" action="/settings/reminders">{tok}'
+        f'<label><input type="checkbox" name="enabled" value="1" style="width:auto"{" checked" if on else ""}> '
+        'Send me reminders</label>'
+        f'<div class="row"><div><label>Morning</label><input type="time" name="morning" value="{esc(am)}"></div>'
+        f'<div><label>Evening</label><input type="time" name="evening" value="{esc(pm)}"></div></div>'
+        f'<button class="go">Save</button></form>{sub}'
+        + (f'<form method="post" action="/settings/test">{tok}<button class="go">Send a test reminder</button></form>'
+           if topic else "") + '<p class="m">A reminder is skipped when you have already logged a reading in that half of the day.</p></div>'
+        f'<div class="card"><h2>Note for your GP report</h2><form method="post" action="/settings/context">{tok}'
+        f'<label>Shown at the top of the GP report (for example your medication and start date)</label>'
+        f'<textarea name="context" rows="4" maxlength="600" style="width:100%;padding:9px;border:1px solid var(--line);'
+        f'border-radius:8px;background:var(--bg);color:var(--ink);font:inherit">{esc(ctx)}</textarea>'
+        '<button class="go">Save note</button></form></div>'
+        '<div class="card"><h2>Import from Apple Health</h2>'
+        '<p class="m">Upload an export made by the Health Auto Export app (the .zip or the .json). '
+        'Importing the same period again is safe.</p><p><a href="/import">Import a file</a></p></div>')
+
+
+def import_page(csrf: str) -> str:
+    tok = f'<input type="hidden" name="csrf" value="{esc(csrf)}">'
+    return ('<h1>Import from Apple Health</h1><div class="card">'
+            f'<form method="post" action="/import" enctype="multipart/form-data">{tok}'
+            '<label>Health Auto Export file (.zip or .json, up to 25 MB)</label>'
+            '<input type="file" name="file" accept=".zip,.json" required>'
+            '<button class="go">Import</button></form>'
+            '<p class="m">This adds steps, sleep, heart rate summaries, weight, workouts and calories to your own '
+            'record. Nothing is shared with anyone else.</p></div>')
