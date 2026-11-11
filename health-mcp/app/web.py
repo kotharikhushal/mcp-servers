@@ -240,6 +240,30 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             return back(res.get("reason", "Could not log that meal"), True, "/")
         return back(f'Logged {name}, {res["kcal"]} kcal', False, "/")
 
+    async def swap_get(request: Request, s: dict[str, Any], store: Store) -> Response:
+        eid = request.query_params.get("entry_id", "")
+        q = request.query_params.get("q", "")[:60]
+        try:
+            menu = await asyncio.to_thread(load_menu, store, s["u"]) if mealie is not None else []
+            m = next((x for x in menu if str(x["id"]) == eid), None)
+            if not m:
+                return back("That meal is no longer in today's plan", True, "/")
+            opts = await asyncio.to_thread(mealie.swap_options, (m.get("per_serving") or {}).get("kcal"), q, m.get("slug"))
+        except mealie_mod.MealieError as e:
+            return back(str(e), True, "/")
+        return page("Swap meal", views.swap_page(store, s["csrf"], m, opts, q), s, "/", request, back=("/", "Today"), tint="--c-food")
+
+    async def swap_post(request: Request, s: dict[str, Any], store: Store) -> Response:
+        f = request.state.form
+        if mealie is None:
+            return back("Meal plan is not connected", True, "/")
+        try:
+            res = await asyncio.to_thread(mealie.swap_plan_entry, str(f.get("entry_id", "")), str(f.get("slug", "")))
+        except mealie_mod.MealieError as e:
+            return back(str(e), True, "/")
+        menu_cache.clear()
+        return back(f'Swapped to {res["recipe"]}', False, "/")
+
     async def meals_skip(request: Request, s: dict[str, Any], store: Store) -> Response:
         f = request.state.form
         eid = str(f.get("entry_id", ""))
@@ -285,10 +309,10 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         return handler
 
     async def log_get(request: Request, s: dict[str, Any], store: Store) -> Response:
-        return page("Quick log", pages.log_page(store, s["csrf"]), s, "/log", request)
+        return page("Quick log", pages.log_page(store, s["csrf"], request.query_params.get("t", "meal")), s, "/log", request)
 
     def back(msg: str, err: bool = False, to: str = "/log") -> Response:
-        return RedirectResponse(to + "?" + urlencode({"err" if err else "ok": msg}), status_code=303)
+        return RedirectResponse(to + ("&" if "?" in to else "?") + urlencode({"err" if err else "ok": msg}), status_code=303)
 
     def num(form: Any, key: str, cast: Callable[[str], Any] = float) -> Any:
         v = str(form.get(key, "")).strip()
@@ -304,16 +328,16 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             r = store.log_blood_pressure(num(f, "systolic", int), num(f, "diastolic", int),
                                          num(f, "pulse", int), when_of(f, store), str(f.get("note", "")).strip() or None)
         except (ValueError, TypeError) as e:
-            return back(f"Could not save: {e}", True)
-        return back(f'Saved {r["systolic"]}/{r["diastolic"]}')
+            return back(f"Could not save: {e}", True, "/log?t=bp")
+        return back(f'Saved {r["systolic"]}/{r["diastolic"]}', False, "/log?t=bp")
 
     async def log_weight(request: Request, s: dict[str, Any], store: Store) -> Response:
         f = request.state.form
         try:
             r = store.log_weight(num(f, "kg"), when_of(f, store))
         except (ValueError, TypeError) as e:
-            return back(f"Could not save: {e}", True)
-        return back(f'Saved {r["kg"]} kg')
+            return back(f"Could not save: {e}", True, "/log?t=weight")
+        return back(f'Saved {r["kg"]} kg', False, "/log?t=weight")
 
     async def log_meal(request: Request, s: dict[str, Any], store: Store) -> Response:
         f = request.state.form
@@ -321,13 +345,13 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             r = store.log_meal(str(f.get("name", "")), num(f, "kcal"), num(f, "protein"), None, None, None,
                                None, num(f, "salt"), when_of(f, store))
         except (ValueError, TypeError) as e:
-            return back(f"Could not save: {e}", True)
-        return back(f'Saved {r["name"]}')
+            return back(f"Could not save: {e}", True, "/log?t=meal")
+        return back(f'Saved {r["name"]}', False, "/log?t=meal")
 
     async def log_fasting(request: Request, s: dict[str, Any], store: Store) -> Response:
         on = str(request.state.form.get("on")) == "1"
         store.set_fasting(store.local(store.now()).date(), on)
-        return back("Marked as a fasting day" if on else "Fasting day removed")
+        return back("Marked as a fasting day" if on else "Fasting day removed", False, "/log?t=fasting")
 
     async def log_delete(request: Request, s: dict[str, Any], store: Store) -> Response:
         f = request.state.form
@@ -537,6 +561,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         Route("/log/delete", authed(log_delete, post=True), methods=["POST"]),
         Route("/settings/fasting-days", authed(fasting_days_post, post=True), methods=["POST"]),
         Route("/meals/eat", authed(meals_eat, post=True), methods=["POST"]),
+        Route("/meals/swap", authed(swap_get)), Route("/meals/swap", authed(swap_post, post=True), methods=["POST"]),
         Route("/meals/skip", authed(meals_skip, post=True), methods=["POST"]),
         Route("/settings/goal-weight", authed(goal_weight, post=True), methods=["POST"]),
         Route("/logout", authed(logout, post=True), methods=["POST"]),

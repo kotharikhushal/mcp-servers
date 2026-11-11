@@ -198,7 +198,7 @@ def meals_card(store: Store, menu: list[dict[str, Any]] | None, error: bool, csr
                 return (f'<form method="post" action="{path}"><input type="hidden" name="csrf" value="{esc(csrf)}">'
                         f'<input type="hidden" name="entry_id" value="{eid}"><input type="hidden" name="on" value="1">'
                         f'<button class="{cls_}" aria-label="{esc(label)}: {esc(name)}">{esc(label)}</button></form>')
-            act, cls = f'<div class="acts">{f("/meals/eat", "I ate this")}{f("/meals/skip", "Skip", "mini ghost")}</div>', ""
+            act, cls = f'<div class="acts">{f("/meals/eat", "I ate this")}<a class="mini ghost" style="display:inline-flex;align-items:center" href="/meals/swap?entry_id={eid}" aria-label="Swap: {esc(name)}">Swap</a>{f("/meals/skip", "Skip", "mini ghost")}</div>', ""
         rows.append(f'<li class="{cls.strip()}"><div class="l"><b>{esc(name)}</b><span>{esc(sub)}</span></div>{act}</li>')
     foot = f"Eaten {eaten:,.0f} kcal of {planned:,.0f} planned"
     if fasting:
@@ -663,3 +663,28 @@ def activity_page(store: Store, d: int) -> str:
                      ("Distance", f"{km:.1f} km" if km >= 0.05 else "Longest " + hm_short(max(w["minutes"] for w in ws) * 60))])
             + _notes([("", f'About {total / max(d / 7, 1):.0f} minutes of workouts a week. The UK guideline for adults is 150 minutes of moderate activity a week.')])
             + f'<div class="card"><h2>Sessions</h2>{_rows(rows)}</div>')
+
+
+def swap_page(store: Store, csrf: str, entry: dict[str, Any], options: list[dict[str, Any]], q: str) -> str:
+    cur = entry.get("per_serving") or {}
+    name = entry.get("recipe_name") or entry.get("recipe") or "this meal"
+    eid = esc(entry["id"])
+    rows = []
+    for o in options:
+        n = o["per_serving"]
+        sub = f'{n["kcal"]:,.0f} kcal' + (f' · {n["protein_g"]:.0f} g protein' if n.get("protein_g") else "")
+        if cur.get("kcal"):
+            sub += f' · {signed(n["kcal"] - cur["kcal"], " kcal", 0)} vs planned'
+        rows.append(f'<li><div class="l"><b>{esc(o["name"])}</b><span>{esc(sub)}</span></div>'
+                    f'<form method="post" action="/meals/swap" style="margin:0"><input type="hidden" name="csrf" value="{esc(csrf)}">'
+                    f'<input type="hidden" name="entry_id" value="{eid}"><input type="hidden" name="slug" value="{esc(o["slug"])}">'
+                    f'<button class="mini" aria-label="Use {esc(o["name"])}">Use this</button></form></li>')
+    body = (f'<ul class="rows">{"".join(rows)}</ul>' if rows else '<p class="m" style="margin:0">No recipes with calories match.</p>')
+    return ('<div class="dhead">' + icon("food") + '<span>Swap meal</span></div>'
+            f'<h1>{esc(name)}</h1><p class="lede">'
+            + (f'Planned: {cur["kcal"]:,.0f} kcal. ' if cur.get("kcal") else "")
+            + 'Closest in calories first.</p>'
+            '<form method="get" action="/meals/swap" class="card" style="padding:12px">'
+            f'<input type="hidden" name="entry_id" value="{eid}"><label for="q">Search recipes</label>'
+            f'<input id="q" name="q" value="{esc(q)}" placeholder="e.g. chicken"><button class="go">Search</button></form>'
+            f'<div class="card">{body}</div><p style="margin:0 0 14px"><a class="cta" href="/">Back to Today</a></p>')

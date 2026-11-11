@@ -5,6 +5,8 @@ are plain rules over the person's own numbers: data, not diagnosis.
 """
 from __future__ import annotations
 
+import re
+
 from datetime import date, timedelta
 from typing import Any
 
@@ -91,7 +93,7 @@ def notes_for(store: Store) -> list[tuple[str, str]]:
     return notes
 
 
-def log_page(store: Store, csrf: str) -> str:
+def log_page(store: Store, csrf: str, tab: str = "meal") -> str:
     today = store.local(store.now()).date()
     fasting = today in store.fasting_days(1)
     tok = f'<input type="hidden" name="csrf" value="{esc(csrf)}">'
@@ -107,7 +109,7 @@ def log_page(store: Store, csrf: str) -> str:
         base = e["name"].split(" x")[0] if e["name"].endswith("(from Mealie)") else e["name"]
         seen.setdefault(base.lower(), e)
     again = "".join(
-        f'<li><div class="l"><b>{esc(e["name"].replace(" (from Mealie)", ""))}</b><span>{e["kcal"]} kcal</span></div>'
+        f'<li><div class="l"><b>{esc(re.sub(r" x[0-9.]+ \(from Mealie\)$", "", e["name"]))}</b><span>{e["kcal"]} kcal</span></div>'
         f'<form method="post" action="/log/meal" style="margin:0">{tok}<input type="hidden" name="name" value="{esc(e["name"])}">'
         f'<input type="hidden" name="kcal" value="{e["kcal"]}">'
         f'<input type="hidden" name="protein" value="{e["protein_g"] if e["protein_g"] is not None else ""}">'
@@ -115,29 +117,37 @@ def log_page(store: Store, csrf: str) -> str:
         f'<button class="mini ghost" aria-label="Log {esc(e["name"])} again">Log again</button></form></li>'
         for e in list(seen.values())[:6])
     again_card = (f'<div class="card"><h2>Recent meals</h2><ul class="rows">{again}</ul></div>' if again else "")
-    return (
-        '<h1>Quick log</h1>'
-        f'{again_card}'
+    bp_card = (
         f'<div class="card"><h2>Blood pressure</h2><form method="post" action="/log/bp">{tok}'
         '<div class="row"><div><label>Systolic</label><input name="systolic" type="number" inputmode="numeric" required></div>'
         '<div><label>Diastolic</label><input name="diastolic" type="number" inputmode="numeric" required></div>'
         '<div><label>Pulse</label><input name="pulse" type="number" inputmode="numeric"></div></div>'
         f'{when}<label>Note</label><input name="note" maxlength="200" placeholder="e.g. after medication">'
-        '<button class="go">Save reading</button></form></div>'
+        '<button class="go">Save reading</button></form></div>')
+    weight_card = (
         f'<div class="card"><h2>Weight</h2><form method="post" action="/log/weight">{tok}'
         '<label>Kilograms</label><input name="kg" type="number" step="0.1" inputmode="decimal" required>'
-        f'{when}<button class="go">Save weight</button></form></div>'
+        f'{when}<button class="go">Save weight</button></form></div>')
+    meal_card = (
         f'<div class="card"><h2>Meal</h2><form method="post" action="/log/meal">{tok}'
         '<label>What did you eat?</label><input name="name" maxlength="200" required>'
         '<div class="row"><div><label>kcal</label><input name="kcal" type="number" step="1" inputmode="numeric" required></div>'
         '<div><label>Protein g</label><input name="protein" type="number" step="0.1" inputmode="decimal"></div>'
         '<div><label>Salt g</label><input name="salt" type="number" step="0.1" inputmode="decimal"></div></div>'
         f'{when}<button class="go">Save meal</button></form>'
-        f'{"<table>" + recent + "</table>" if recent else ""}</div>'
+        f'{"<table>" + recent + "</table>" if recent else ""}</div>')
+    fasting_card = (
         f'<div class="card"><h2>Fasting day</h2><form method="post" action="/log/fasting">{tok}'
         f'<input type="hidden" name="on" value="{"0" if fasting else "1"}">'
         f'<p class="m">Today is {"marked as a fasting day" if fasting else "not marked as a fasting day"}.</p>'
         f'<button class="go">{"Unmark today" if fasting else "Mark today as fasting"}</button></form></div>')
+    tabs = (("meal", "Meal", again_card + meal_card), ("bp", "Blood pressure", bp_card),
+            ("weight", "Weight", weight_card), ("fasting", "Fasting", fasting_card))
+    current = tab if tab in {t[0] for t in tabs} else "meal"
+    nav = ('<div class="chips" role="tablist" aria-label="What to log" style="flex-wrap:wrap">' + "".join(
+        f'<a href="/log?t={k}" role="tab"{" aria-current=true aria-selected=true" if k == current else ""}>{esc(n)}</a>'
+        for k, n, _ in tabs) + "</div>")
+    return '<h1>Quick log</h1>' + nav + next(body for k, _, body in tabs if k == current)
 
 
 def login_page(message: str = "") -> str:

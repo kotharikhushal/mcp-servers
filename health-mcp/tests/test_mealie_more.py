@@ -202,3 +202,16 @@ def test_all_new_tools_exist_and_health_settings_tools_work(tmp_path, monkeypatc
     n = call(mcp, "set_goals", calorie_goal_kcal=1850, protein_goal_g=120, salt_limit_g=6)
     assert (n["calorie_goal_kcal"], n["protein_goal_g"], n["salt_limit_g"]) == (1850, 120, 6) and n["steps_goal"] == 10000
     assert call(mcp, "set_gp_note", text="Losartan 25 mg from 10 Nov")["saved"] and call(mcp, "get_settings")["gp_note"].startswith("Losartan")
+
+
+def test_swap_options_are_closest_in_calories_and_swap_changes_the_plan():
+    f = Fake()
+    f.recipes["soup"] = {"id": "r9", "slug": "soup", "name": "Soup", "tags": [], "nutrition": {"calories": "350"}, "recipeIngredient": []}
+    c = make(f)
+    opts = c.swap_options(380, exclude_slug="dal")
+    assert [o["slug"] for o in opts] == ["soup"]          # no-calorie recipes are left out, current recipe excluded
+    assert c.swap_options(None, "SOU")[0]["name"] == "Soup"
+    res = c.swap_plan_entry("p1", "soup")
+    assert res["recipe"] == "Soup" and f.plan["p1"]["recipeId"] == "r9" and f.plan["p1"]["entryType"] == "lunch"
+    with pytest.raises(mealie.MealieError):
+        c.swap_plan_entry("bad id!", "soup")
