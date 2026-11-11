@@ -269,7 +269,17 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
                 "grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
                 "client_id": client_id, "client_secret": client_secret, "code_verifier": pending["v"]})
             r.raise_for_status()
-            claims = await verifier.claims_from_jwt(r.json().get("id_token", ""))
+            tokens = r.json()
+            claims = await verifier.claims_from_jwt(tokens.get("id_token", ""))
+            if claims and not claims.get("preferred_username") and disc.get("userinfo_endpoint"):
+                # Authelia 4.39+ keeps profile claims out of the ID token unless a claims policy asks
+                # for them, so read them from the userinfo endpoint and check they are the same person.
+                ui = await client.get(disc["userinfo_endpoint"],
+                                      headers={"Authorization": f"Bearer {tokens.get('access_token', '')}"})
+                ui.raise_for_status()
+                info = ui.json()
+                if str(info.get("sub", "")) == str(claims.get("sub", "?")):
+                    claims = {**claims, "preferred_username": info.get("preferred_username")}
         except Exception:
             log.exception("OIDC code exchange failed")
             return headers(HTMLResponse(pages.login_page("Sign-in failed."), status_code=502))

@@ -18,10 +18,12 @@ NOW = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
 class FakeVerifier:
     def __init__(self):
         self.claims = {}
+        self.userinfo = {}
 
     async def discovery(self):
         return {"authorization_endpoint": "https://auth.example.com/authorize",
-                "token_endpoint": "https://auth.example.com/token"}
+                "token_endpoint": "https://auth.example.com/token",
+                "userinfo_endpoint": "https://auth.example.com/userinfo"}
 
     async def claims_from_jwt(self, token):
         return dict(self.claims) if token == "good-id-token" else None
@@ -30,7 +32,11 @@ class FakeVerifier:
 @pytest.fixture
 def env(tmp_path):
     ver = FakeVerifier()
-    transport = httpx.MockTransport(lambda req: httpx.Response(200, json={"id_token": "good-id-token"}))
+    def handler(req):
+        if req.url.path == "/userinfo":
+            return httpx.Response(200, json=ver.userinfo)
+        return httpx.Response(200, json={"id_token": "good-id-token", "access_token": "at"})
+    transport = httpx.MockTransport(handler)
     stores = web.Stores(str(tmp_path), "khushal", "Europe/London")
     app = web.create_app(ENV, stores, USERS, ver, http=httpx.AsyncClient(transport=transport))
     client = TestClient(app, base_url=BASE, follow_redirects=False)
@@ -150,6 +156,24 @@ def test_login_flow_creates_session_for_allowed_user(env):
     r = _login_flow(c, ver, "Shivani")
     assert r.status_code == 303 and r.headers["location"] == "/"
     assert "Shivani" in c.get("/").text
+
+
+def test_username_is_read_from_userinfo_when_id_token_lacks_it(env):
+    c, _, ver = env
+    r = c.get("/login")
+    q = parse_qs(urlparse(r.headers["location"]).query)
+    ver.claims = {"sub": "u-1", "nonce": q["nonce"][0]}
+    ver.userinfo = {"sub": "u-1", "preferred_username": "shivani"}
+    r = c.get("/callback", params={"code": "abc", "state": q["state"][0]})
+    assert r.status_code == 303 and "Shivani" in c.get("/").text
+
+
+def test_userinfo_for_a_different_subject_is_refused(env):
+    c, _, ver = env
+    q = parse_qs(urlparse(c.get("/login").headers["location"]).query)
+    ver.claims = {"sub": "u-1", "nonce": q["nonce"][0]}
+    ver.userinfo = {"sub": "someone-else", "preferred_username": "khushal"}
+    assert c.get("/callback", params={"code": "abc", "state": q["state"][0]}).status_code == 403
 
 
 def test_login_refuses_unlisted_account_and_wrong_nonce(env):
