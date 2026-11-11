@@ -17,7 +17,20 @@ HOME_BP_HIGH = (135, 85)       # NHS home-reading threshold
 BP_URGENT = (180, 120)
 
 
-NUTRITION_GOALS = {"kcal_goal": (1000, 4000), "protein_goal": (20, 300), "salt_limit": (1, 12)}
+NUTRITION_GOALS = {"kcal_goal": (1000, 4000), "protein_goal": (20, 300), "salt_limit": (1, 12),
+                   "goal_weight": (40, 200)}
+
+
+def when_label(store: Store, t: str) -> str:
+    """'Today 21:30', 'Yesterday 08:10' or 'Tue 10 Nov 08:10' for a local 'YYYY-MM-DD HH:MM' string."""
+    from datetime import date as _d, timedelta as _td
+    today = store.local(store.now()).date()
+    d = _d.fromisoformat(t[:10])
+    if d == today:
+        return f"Today {t[11:16]}"
+    if d == today - _td(days=1):
+        return f"Yesterday {t[11:16]}"
+    return f"{d.strftime('%a %-d %b')} {t[11:16]}"
 
 
 def nutrition_goals(store: Store) -> dict[str, float | None]:
@@ -85,7 +98,7 @@ def log_page(store: Store, csrf: str) -> str:
     when = ('<label>Time (leave empty for now)</label><input type="datetime-local" name="when">')
     meals = [e for e in store.food_entries(2) if e["source"] == "manual"][-5:]
     recent = "".join(
-        f'<tr><td>{esc(e["time"])}</td><td>{esc(e["name"])}</td><td>{e["kcal"]} kcal</td>'
+        f'<tr><td>{esc(when_label(store, e["time"]))}</td><td>{esc(e["name"])}</td><td>{e["kcal"]} kcal</td>'
         f'<td><form method="post" action="/log/delete" style="margin:0">{tok}'
         f'<input type="hidden" name="kind" value="nutrition"><input type="hidden" name="id" value="{e["id"]}">'
         f'<button class="link">Delete</button></form></td></tr>' for e in reversed(meals))
@@ -147,7 +160,7 @@ def gp_page(store: Store, name: str, days: int) -> str:
     st = bp_stats(rs)
 
     def blk(b: dict[str, Any] | None) -> str:
-        return f'{b["systolic"]:.0f}/{b["diastolic"]:.0f} mmHg ({b["readings"]} readings)' if b else "not enough data"
+        return f'{b["systolic"]:.0f}/{b["diastolic"]:.0f} mmHg ({b["readings"]} reading{"s" if b["readings"] != 1 else ""})' if b else "not enough data"
 
     hi = max(rs, key=lambda r: (r["systolic"], r["diastolic"]))
     lo = min(rs, key=lambda r: (r["systolic"], r["diastolic"]))
@@ -226,6 +239,8 @@ def settings_page(store: Store, csrf: str, ntfy_base: str) -> str:
         f'<input name="protein_goal" type="number" inputmode="numeric" min="20" max="300" step="5" value="{nv("protein_goal")}" placeholder="optional"></div>'
         '<div><label>Salt max (g)</label>'
         f'<input name="salt_limit" type="number" inputmode="decimal" min="1" max="12" step="0.5" value="{nv("salt_limit")}" placeholder="optional"></div></div>'
+        '<label>Goal weight (kg)</label>'
+        f'<input name="goal_weight" type="number" inputmode="decimal" min="40" max="200" step="0.5" value="{nv("goal_weight")}" placeholder="optional">'
         '<button class="go">Save goals</button></form></div>'
         f'<div class="card"><h2>Blood pressure reminders</h2><form method="post" action="/settings/reminders">{tok}'
         f'<label><input type="checkbox" name="enabled" value="1" style="width:auto"{" checked" if on else ""}> '

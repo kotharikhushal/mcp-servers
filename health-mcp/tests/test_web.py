@@ -279,7 +279,7 @@ def test_calorie_protein_and_salt_goals_show_what_is_left_today(env):
     ok = c.post("/settings/goals", data={**base, "kcal_goal": "1850", "protein_goal": "120", "salt_limit": "6"})
     assert "ok=" in ok.headers["location"]
     food = c.get("/food").text
-    assert "Goal 1,850 kcal" in food and "290 left" in food and "of 120 g" in food and "limit is 6 g" in food
+    assert "Goal 1,850 kcal" in food and "290 kcal left" in food and "of 120 g" in food and "of 6.0 g" in food and "<h2>Meals</h2>" in food and 'role="progressbar"' in food
     assert "290 kcal left" in c.get("/").text
     assert 'value="1850"' in c.get("/settings").text
     assert stores.get("shivani").get_setting("kcal_goal") is None
@@ -434,3 +434,36 @@ def test_import_confirmation_is_prominent_and_remembered(env):
     c.cookies.clear()
     signed_in(c, "khushal")
     assert "Nothing imported yet" in c.get("/import").text           # per person
+
+
+def test_goal_weight_is_optional_and_drives_the_weight_page(env):
+    c, stores, _ = env
+    signed_in(c)
+    k = stores.get("khushal")
+    base = {"csrf": "tok", "steps_goal": "10000", "sleep_goal": "8"}
+    assert "err=" in c.post("/settings/goals", data={**base, "goal_weight": "20"}).headers["location"]
+    for i, kg in enumerate((75.0, 74.8, 74.6, 74.7, 74.4)):
+        k.log_weight(kg, datetime(2026, 11, 7 + i, 7, 30, tzinfo=timezone.utc))
+    assert "Set a goal weight" in c.get("/weight").text
+    assert "ok=" in c.post("/settings/goals", data={**base, "goal_weight": "70"}).headers["location"]
+    w = c.get("/weight").text
+    assert "To goal" in w and "above your 70 kg goal" in w and "7-day average" in w and "Morning weigh-in" in w
+    c.post("/settings/goals", data=base)
+    assert k.get_setting("goal_weight") is None
+
+
+def test_blood_pressure_readings_a_minute_apart_are_one_sitting():
+    from app.views import bp_sessions
+    rs = [{"time": "2026-11-10 08:00", "systolic": 150, "diastolic": 90, "pulse": 70, "note": "", "source": "manual", "id": 1},
+          {"time": "2026-11-10 08:02", "systolic": 140, "diastolic": 86, "pulse": 68, "note": "", "source": "manual", "id": 2},
+          {"time": "2026-11-10 21:00", "systolic": 130, "diastolic": 80, "pulse": None, "note": "", "source": "manual", "id": 3}]
+    s = bp_sessions(rs)
+    assert len(s) == 2 and (s[0]["systolic"], s[0]["diastolic"]) == (145, 88) and len(s[0]["readings"]) == 2
+
+
+def test_delete_needs_a_second_tap(env):
+    c, stores, _ = env
+    signed_in(c)
+    stores.get("khushal").log_meal("Toast", 200, 6, None, None, None, None, 0.2, None)
+    page = c.get("/food").text
+    assert "Delete this entry?" in page and "Yes, delete" in page

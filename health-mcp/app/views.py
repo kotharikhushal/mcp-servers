@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from typing import Any, Sequence
 
 from . import charts
-from .pages import BP_URGENT, HOME_BP_HIGH, goals, notes_for, nutrition_goals
+from .pages import BP_URGENT, HOME_BP_HIGH, goals, notes_for, nutrition_goals, when_label
 from .store import Store
 from .tools import bp_stats
 from .ui import chips, esc, icon, legend, stats, tile
@@ -39,13 +39,7 @@ def _day(d: date) -> str:
 
 
 def _when(store: Store, t: str) -> str:
-    today = store.local(store.now()).date()
-    d = date.fromisoformat(t[:10])
-    if d == today:
-        return f"Today {t[11:16]}"
-    if d == today - timedelta(days=1):
-        return f"Yesterday {t[11:16]}"
-    return f"{_day(d)} {t[11:16]}"
+    return when_label(store, t)
 
 
 def _axis(dates: Sequence[date], d: int) -> tuple[list[str], int]:
@@ -75,9 +69,54 @@ def _avg(vals: Sequence[float]) -> float | None:
 
 
 def _delete(csrf: str, kind: str, rid: int) -> str:
-    return (f'<form method="post" action="/log/delete" style="margin:0"><input type="hidden" name="csrf" value="{esc(csrf)}">'
+    """Two taps: Delete opens a confirmation, so a stray touch cannot remove an entry."""
+    return ('<details class="confirm"><summary role="button">Delete</summary>'
+            '<div class="ask">Delete this entry?</div>'
+            f'<form method="post" action="/log/delete" style="margin:0;text-align:right"><input type="hidden" name="csrf" value="{esc(csrf)}">'
             f'<input type="hidden" name="kind" value="{esc(kind)}"><input type="hidden" name="id" value="{rid}">'
-            '<button class="link" aria-label="Delete this entry">Delete</button></form>')
+            '<button class="link" aria-label="Confirm delete this entry">Yes, delete</button></form></details>')
+
+
+def bp_sessions(rs: Sequence[dict[str, Any]], gap_min: int = 30) -> list[dict[str, Any]]:
+    """Readings taken within 30 minutes of each other are one sitting, shown as their average."""
+    out: list[dict[str, Any]] = []
+    for r in rs:
+        mins = int(r["time"][11:13]) * 60 + int(r["time"][14:16])
+        if out and out[-1]["time"][:10] == r["time"][:10] and mins - out[-1]["_last"] <= gap_min:
+            out[-1]["readings"].append(r)
+            out[-1]["_last"] = mins
+        else:
+            out.append({"time": r["time"], "readings": [r], "_last": mins})
+    for s in out:
+        n = len(s["readings"])
+        s["systolic"] = round(sum(x["systolic"] for x in s["readings"]) / n)
+        s["diastolic"] = round(sum(x["diastolic"] for x in s["readings"]) / n)
+        pulses = [x["pulse"] for x in s["readings"] if x["pulse"]]
+        s["pulse"] = round(sum(pulses) / len(pulses)) if pulses else None
+    return out
+
+
+def _night(v: dict[str, Any]) -> float:
+    """Seconds slept overnight, leaving daytime naps out."""
+    return v.get("night_seconds", v["asleep_seconds"])
+
+
+def _meal(hour: int) -> str:
+    return ("Breakfast" if 4 <= hour < 11 else "Lunch" if 11 <= hour < 15 else "Snack" if 15 <= hour < 17
+            else "Dinner" if 17 <= hour < 22 else "Snack")
+
+
+def _meter(label: str, value: float, goal: float, unit: str, *, tint: str, limit: bool = False, digits: int = 0) -> str:
+    frac = max(0.0, min(value / goal, 1.0)) if goal else 0.0
+    over = value > goal
+    left = goal - value
+    sub = (f'{abs(left):,.{digits}f} {unit} {"over" if over else "left"}' if not limit or over
+           else f'{left:,.{digits}f} {unit} under your limit')
+    return (f'<div class="meter{" over" if over else ""}" style="--tc:var({tint})">'
+            f'<div class="mh"><b>{esc(label)}</b><span>{value:,.{digits}f} of {goal:,.{digits}f} {esc(unit)}</span></div>'
+            f'<div class="tr" role="progressbar" aria-label="{esc(label)}" aria-valuemin="0" aria-valuemax="{goal:g}" '
+            f'aria-valuenow="{value:.{digits}f}"><i style="width:{frac * 100:.0f}%"></i></div>'
+            f'<div class="ms">{esc(sub)}</div></div>')
 
 
 def _rows(items: Sequence[tuple[str, str, str, str]]) -> str:
@@ -122,9 +161,9 @@ def today_page(store: Store, name: str) -> str:
                              big=f"{s_today:,}" if s_today is not None else "–", small=f'of {g["steps_goal"]:,.0f}',
                              summary=f"Steps today: {s_today if s_today is not None else 'no data'} of {g['steps_goal']:.0f}")
     goal_s = g["sleep_goal"] * 3600
-    sleep_ring = charts.ring(night["asleep_seconds"] / goal_s if night else 0, "--c-sleep",
-                             big=hm_short(night["asleep_seconds"]) if night else "–", small=f'of {g["sleep_goal"]:g} h',
-                             summary=f"Sleep last night: {hm(night['asleep_seconds']) if night else 'no data'}")
+    sleep_ring = charts.ring(_night(night) / goal_s if night else 0, "--c-sleep",
+                             big=hm_short(_night(night)) if night else "–", small=f'of {g["sleep_goal"]:g} h',
+                             summary=f"Sleep last night: {hm(_night(night)) if night else 'no data'}")
     hero = ('<div class="card hero">'
             f'<a href="/steps">{steps_ring}<div class="cap">Steps</div><div class="sub">today</div></a>'
             f'<a href="/sleep">{sleep_ring}<div class="cap">Sleep</div><div class="sub">last night</div></a></div>')
@@ -144,11 +183,13 @@ def today_page(store: Store, name: str) -> str:
     else:
         tiles.append(tile("/heart", "Heart rate", "heart", "--c-heart", "–", "", "No data yet"))
 
-    bps = store.bp_readings(14)
+    bps = bp_sessions(store.bp_readings(14))
     if bps:
         b = bps[-1]
+        n = len(b["readings"])
         tiles.append(tile("/bp", "Blood pressure", "bp", "--c-heart", f'{b["systolic"]}/{b["diastolic"]}', "mmHg",
-                          _when(store, b["time"]), charts.spark([float(r["systolic"]) for r in bps], "--c-heart")))
+                          (f"{n} readings, average · " if n > 1 else "") + _when(store, b["time"]),
+                          charts.spark([float(r["systolic"]) for r in bps], "--c-heart")))
     else:
         tiles.append(tile("/bp", "Blood pressure", "bp", "--c-heart", "–", "", "Log a reading"))
 
@@ -207,7 +248,7 @@ def sleep_page(store: Store, d: int) -> str:
         return head + '<h1>Sleep</h1>' + chips("/sleep", d) + _empty("No sleep recorded in this period.")
     last_d, last = have[-1]
     goal_s = g["sleep_goal"] * 3600
-    avg = _avg([v["asleep_seconds"] for _, v in have]) or 0
+    avg = _avg([_night(v) for _, v in have]) or 0
     per = []
     for v in nights:
         if not v:
@@ -219,26 +260,30 @@ def sleep_page(store: Store, d: int) -> str:
     labs, every = _axis(dates, d)
     chart = charts.stacked_sleep(per, labs, label_every=every,
                                  summary=f"Hours in bed per night over {d} days, split by sleep stage")
-    best = max(have, key=lambda p: p[1]["asleep_seconds"])
-    worst = min(have, key=lambda p: p[1]["asleep_seconds"])
+    best = max(have, key=lambda p: _night(p[1]))
+    worst = min(have, key=lambda p: _night(p[1]))
     stage_txt = " · ".join(f'{k} {hm_short(v)}' for k, v in last["stages"].items() if k not in ("unknown",) and v)
     notes: list[tuple[str, str]] = []
     gap = avg - goal_s
     notes.append(("" if gap >= 0 else "warn",
                   f'Average {hm(avg)} a night, {hm(abs(gap))} {"above" if gap >= 0 else "below"} your {g["sleep_goal"]:g} hour goal.'))
-    short = sum(1 for _, v in have if v["asleep_seconds"] < 6 * 3600)
+    naps = [(x, v["nap_seconds"]) for x, v in have if v.get("nap_seconds")]
+    if naps:
+        notes.append(("", f'{len(naps)} nap{"s" if len(naps) != 1 else ""} not counted in the nightly figures '
+                          f'(latest {hm_short(naps[-1][1])} on {_day(naps[-1][0])}).'))
+    short = sum(1 for _, v in have if _night(v) < 6 * 3600)
     if short:
         notes.append(("warn", f'{short} of {len(have)} nights were under 6 hours.'))
     rows = [(_day(x), f'{v.get("bed", "")[11:16]} to {v.get("wake", "")[11:16]}'
-             + (f' · {round(v["awake_seconds"] / 60)} min awake' if v["awake_seconds"] else ""), hm_short(v["asleep_seconds"]), "")
+             + (f' · {round(v["awake_seconds"] / 60)} min awake' if v["awake_seconds"] else ""), hm_short(_night(v)), "")
             for x, v in reversed(have[-14:])]
-    return (head + f'<div class="hero1">{esc(hm_short(last["asleep_seconds"]))}</div>'
+    return (head + f'<div class="hero1">{esc(hm_short(_night(last)))}</div>'
             f'<div class="delta">{"Last night" if last_d == store.local(store.now()).date() else _day(last_d)}'
             f'{" · " + esc(stage_txt) if stage_txt else ""}</div>'
             + chips("/sleep", d)
             + f'<div class="card">{chart}{legend([("--st-deep", "Deep"), ("--st-rem", "REM"), ("--st-light", "Light"), ("--st-awake", "Awake")])}</div>'
-            + stats([("Average", hm_short(avg)), ("Longest", hm_short(best[1]["asleep_seconds"])),
-                     ("Shortest", hm_short(worst[1]["asleep_seconds"]))])
+            + stats([("Average", hm_short(avg)), ("Longest", hm_short(_night(best[1]))),
+                     ("Shortest", hm_short(_night(worst[1])))])
             + _notes(notes) + f'<div class="card"><h2>Nights</h2>{_rows(rows)}</div>')
 
 
@@ -306,70 +351,138 @@ def heart_page(store: Store, d: int) -> str:
 
 
 def bp_page(store: Store, csrf: str, d: int) -> str:
-    rs = store.bp_readings(d)
+    raw = store.bp_readings(d)
     dates, _ = store.window(d)
     head = _head("", "bp", "Blood pressure")
-    if not rs:
+    if not raw:
         return head + '<h1>Blood pressure</h1>' + chips("/bp", d) + _empty("No readings in this period.", ADD)
+    rs = bp_sessions(raw)
     last = rs[-1]
     xs = _xs([r["time"] for r in rs], dates)
-    titles = [f'{r["time"]} {r["systolic"]}/{r["diastolic"]}' for r in rs]
+    titles = [f'{r["time"]} {r["systolic"]}/{r["diastolic"]}' + (f' (average of {len(r["readings"])})' if len(r["readings"]) > 1 else "")
+              for r in rs]
     chart = charts.line([("Top (systolic)", "--c-heart", [float(r["systolic"]) for r in rs]),
                          ("Bottom (diastolic)", "--c-weight", [float(r["diastolic"]) for r in rs])],
                         titles, xs=xs, thresholds=[(HOME_BP_HIGH[0], "135"), (HOME_BP_HIGH[1], "85")],
                         axis=_axis_ticks(dates, d), fmt=lambda v: f"{v:.0f}", pad=8, direct_labels=False,
-                        summary=f"Blood pressure readings over {d} days. Dashed lines mark 135 and 85, the home reading threshold.")
-    first_day = rs[0]["time"][:10]
+                        summary=f"Blood pressure over {d} days, one point per sitting. Dashed lines mark 135 and 85, the home reading threshold.")
     st = bp_stats(rs)
-    avg = st["average_all"]
+    skip_first = st["average_excluding_first_day"] is not None
+    avg = st["average_excluding_first_day"] or st["average_all"]
     above = sum(1 for r in rs if r["systolic"] >= HOME_BP_HIGH[0] or r["diastolic"] >= HOME_BP_HIGH[1])
     notes: list[tuple[str, str]] = []
     if last["systolic"] >= BP_URGENT[0] or last["diastolic"] >= BP_URGENT[1]:
         notes.append(("bad", "Your last reading was very high. Contact your GP or NHS 111 today. With chest pain, breathlessness, "
                       "confusion or a severe headache, call 999."))
     elif last["systolic"] >= HOME_BP_HIGH[0] or last["diastolic"] >= HOME_BP_HIGH[1]:
-        notes.append(("warn", f'Your last reading is above the {HOME_BP_HIGH[0]}/{HOME_BP_HIGH[1]} home threshold. '
+        notes.append(("warn", f'Your last sitting averaged above the {HOME_BP_HIGH[0]}/{HOME_BP_HIGH[1]} home threshold. '
                       'Your GP looks at the pattern over several days, so keep logging morning and evening.'))
-    notes.append(("", f'{above} of {len(rs)} readings were at or above {HOME_BP_HIGH[0]}/{HOME_BP_HIGH[1]}.'))
+    notes.append(("", f'{above} of {len(rs)} sittings were at or above {HOME_BP_HIGH[0]}/{HOME_BP_HIGH[1]}.'
+                  + (" Two readings a minute apart count as one sitting." if len(rs) < len(raw) else "")))
+    if skip_first:
+        notes.append(("", "The average leaves out your first day of readings, as GPs do for home monitoring."))
     mor, eve = st["morning_before_noon"], st["evening_noon_onwards"]
-    cells = [("Average", f'{avg["systolic"]:.0f}/{avg["diastolic"]:.0f}' if avg else "–"),
+    cells = [("Average" + (" (from day 2)" if skip_first else ""), f'{avg["systolic"]:.0f}/{avg["diastolic"]:.0f}' if avg else "–"),
              ("Mornings", f'{mor["systolic"]:.0f}/{mor["diastolic"]:.0f}' if mor else "–"),
              ("Evenings", f'{eve["systolic"]:.0f}/{eve["diastolic"]:.0f}' if eve else "–")]
-    rows = [(_when(store, r["time"]),
-             (f'pulse {r["pulse"]}' if r["pulse"] else "") + (f' · {r["note"]}' if r["note"] else ""),
-             f'{r["systolic"]}/{r["diastolic"]}',
-             _delete(csrf, "blood_pressure", r["id"]) if r["source"] == "manual" else "") for r in reversed(rs[-30:])]
+    rows = []
+    for r in reversed(rs[-30:]):
+        n = len(r["readings"])
+        if n == 1:
+            one = r["readings"][0]
+            rows.append((_when(store, r["time"]), (f'pulse {one["pulse"]}' if one["pulse"] else "") + (f' · {one["note"]}' if one["note"] else ""),
+                         f'{r["systolic"]}/{r["diastolic"]}', _delete(csrf, "blood_pressure", one["id"]) if one["source"] == "manual" else ""))
+            continue
+        inner = "".join(
+            f'<li><div class="l"><b>{x["systolic"]}/{x["diastolic"]}</b><span>{esc(x["time"][11:16])}</span></div>'
+            f'<div>{_delete(csrf, "blood_pressure", x["id"]) if x["source"] == "manual" else ""}</div></li>' for x in r["readings"])
+        rows.append((_when(store, r["time"]), f'{n} readings, average' + (f' · pulse {r["pulse"]}' if r["pulse"] else ""),
+                     f'{r["systolic"]}/{r["diastolic"]}',
+                     f'<details class="more"><summary role="button">Show readings</summary><ul class="rows">{inner}</ul></details>'))
     return (head + f'<div class="hero1">{last["systolic"]}/{last["diastolic"]}<small>mmHg</small></div>'
-            f'<div class="delta">{esc(_when(store, last["time"]))}{" · pulse " + str(last["pulse"]) if last["pulse"] else ""}</div>'
+            f'<div class="delta">{esc(_when(store, last["time"]))}'
+            f'{" · average of " + str(len(last["readings"])) + " readings" if len(last["readings"]) > 1 else ""}'
+            f'{" · pulse " + str(last["pulse"]) if last["pulse"] else ""}</div>'
             + chips("/bp", d) + f'<div class="card">{chart}{legend([("--c-heart", "Top number (systolic)"), ("--c-weight", "Bottom number (diastolic)")])}</div>' + stats(cells) + _notes(notes)
             + '<div class="card"><h2>Week summary for your GP</h2><p class="m" style="margin:0 0 10px">Averages, morning and evening '
               f'splits and a printable record.</p><a class="cta" href="/gp">Open GP report</a></div>'
-            + f'<div class="card"><h2>Readings</h2>{_rows(rows)}</div>'
+            + f'<div class="card"><h2>Sittings</h2>{_rows(rows)}</div>'
             + f'<p style="margin:0 0 14px"><a class="cta" href="/log">Add a reading</a></p>')
 
 
+def _mean(xs: Sequence[float]) -> float | None:
+    return sum(xs) / len(xs) if xs else None
+
+
 def weight_page(store: Store, csrf: str, d: int) -> str:
-    rs = store.weight_readings(d)
+    wide = store.weight_readings(d + 14)
     dates, _ = store.window(d)
+    start = dates[0].isoformat()
+    rs = [r for r in wide if r["time"][:10] >= start]
     head = _head("", "weight", "Weight")
     if not rs:
         return head + '<h1>Weight</h1>' + chips("/weight", d) + _empty("No weight readings in this period.", ADD)
-    last, first = rs[-1], rs[0]
+    last = rs[-1]
+    ng = nutrition_goals(store)
+    goal = ng["goal_weight"]
+
+    def day_ord(t: str) -> int:
+        return date.fromisoformat(t[:10]).toordinal()
+
+    def avg7(i: int) -> float:
+        """Average of every weigh-in in the 7 days up to and including reading i."""
+        o = day_ord(wide[i]["time"])
+        return _mean([x["kg"] for x in wide if o - 6 <= day_ord(x["time"]) <= o and x["time"] <= wide[i]["time"]]) or wide[i]["kg"]
+    off = len(wide) - len(rs)
+    trend = [avg7(off + i) for i in range(len(rs))]
     kgs = [r["kg"] for r in rs]
-    chart = charts.line([("Weight", "--c-weight", kgs)], [f'{r["time"]} {r["kg"]:.1f} kg' for r in rs],
+    today_o = store.local(store.now()).date().toordinal()
+    week = [x["kg"] for x in wide if today_o - 6 <= day_ord(x["time"]) <= today_o]
+    prev = [x["kg"] for x in wide if today_o - 13 <= day_ord(x["time"]) <= today_o - 7]
+    cur_avg = _mean(week)
+    prev_avg = _mean(prev) if len(prev) >= 3 else None
+    chart = charts.line([("Weigh-ins", "--c-weight", kgs), ("7-day average", "--accent", trend)],
+                        [f'{r["time"]} {r["kg"]:.1f} kg' for r in rs],
                         xs=_xs([r["time"] for r in rs], dates), axis=_axis_ticks(dates, d),
+                        thresholds=[(goal, "Goal")] if goal and min(kgs) - 2.5 <= goal <= max(kgs) + 2.5 else (),
                         fmt=lambda v: f"{v:.1f}", direct_labels=False, pad=0.5,
-                        summary=f"Weight over {d} days, from {first['kg']:.1f} to {last['kg']:.1f} kilograms")
-    change = last["kg"] - first["kg"]
-    notes = [("", f'{signed(change, " kg")} over this period ({first["kg"]:.1f} to {last["kg"]:.1f} kg).'
-              if len(rs) > 1 else "Log your weight a few times a week to see a trend.")]
-    rows = [(_when(store, r["time"]), "from your scale or watch" if r["source"] != "manual" else "logged by you",
+                        summary=f"Weight over {d} days with its 7-day average" + (f" and your goal of {goal:g} kilograms" if goal else ""))
+    notes: list[tuple[str, str]] = []
+    if len(week) < 5:
+        notes.append(("warn" if len(week) < 3 else "", f'{len(week)} weigh-in{"s" if len(week) != 1 else ""} in the last 7 days. '
+                      'Five or more, at the same time each morning, makes the average steady enough to trust.'))
+    if goal and cur_avg:
+        togo = cur_avg - goal
+        if togo > 0.05:
+            notes.append(("", f'{togo:.1f} kg above your {goal:g} kg goal. At about 0.5 kg a week that is roughly {max(round(togo / 0.5), 1)} weeks.'))
+        else:
+            notes.append(("", f'Your 7-day average is at or below your {goal:g} kg goal.'))
+    elif not goal:
+        notes.append(("", "Set a goal weight in Settings to see how far you have to go."))
+    notes.append(("", "Daily weight moves by a kilo or more with water and salt. Read the 7-day average, not single days."))
+    first_wk = [r["kg"] for r in rs if day_ord(r["time"]) < day_ord(rs[0]["time"]) + 7]
+    last_wk = [r["kg"] for r in rs if day_ord(r["time"]) > day_ord(rs[-1]["time"]) - 7]
+    change = (_mean(last_wk) - _mean(first_wk)) if d >= 14 and len(first_wk) >= 2 and len(last_wk) >= 2 else None
+    rows = [(_when(store, r["time"]),
+             ("Morning weigh-in" if int(r["time"][11:13]) < 10 else "Later in the day")
+             + (" · from your scale or watch" if r["source"] != "manual" else " · logged by you"),
              f'{r["kg"]:.1f} kg', _delete(csrf, "weight", r["id"]) if r["source"] == "manual" else "")
             for r in reversed(rs[-30:])]
+    if cur_avg and len(week) >= 3:
+        delta = f'7-day average {cur_avg:.1f} kg' + (f' · {signed(cur_avg - prev_avg, " kg")} on the week before' if prev_avg else "")
+    else:
+        delta = f'{esc(_when(store, last["time"]))} · average needs 3 or more weigh-ins in a week'
+    if goal and cur_avg:
+        third = ("To goal", f'{max(cur_avg - goal, 0):.1f} kg')
+    else:
+        third = ("Lowest", f"{min(kgs):.1f} kg")
     return (head + f'<div class="hero1">{last["kg"]:.1f}<small>kg</small></div>'
-            f'<div class="delta">{esc(_when(store, last["time"]))} · {signed(change, " kg")} in this period</div>'
-            + chips("/weight", d) + f'<div class="card">{chart}</div>'
-            + stats([("Change", signed(change, " kg")), ("Lowest", f"{min(kgs):.1f} kg"), ("Highest", f"{max(kgs):.1f} kg")])
+            f'<div class="delta">{delta}</div>'
+            + chips("/weight", d)
+            + f'<div class="card">{chart}{legend([("--c-weight", "Weigh-ins"), ("--accent", "7-day average")])}</div>'
+            + stats([("7-day average", f"{cur_avg:.1f} kg" if cur_avg else "–"),
+                     ("Change" + (" in period" if change is not None else ""), signed(change, " kg") if change is not None else "–"),
+                     third])
             + _notes(notes) + f'<div class="card"><h2>Weigh-ins</h2>{_rows(rows)}</div>'
             + '<p style="margin:0 0 14px"><a class="cta" href="/log">Add your weight</a></p>')
 
@@ -391,41 +504,55 @@ def food_page(store: Store, csrf: str, d: int) -> str:
         salt[e["_day"]] = salt.get(e["_day"], 0) + (e["salt_g"] or 0)
     logged = [x for x in dates if by[x] and x != today] or [x for x in dates if by[x]]
     labs, every = _axis(dates, d)
-    chart = charts.bars([float(by[x]) if by[x] else None for x in dates], labs, "--c-food", unit=" kcal",
-                        label_every=every, faded=[x in fasting for x in dates],
-                        summary=f"Calories logged per day over {d} days")
-    avg = _avg([by[x] for x in logged]) or 0
     ng = nutrition_goals(store)
-    notes = []
+    kg = ng["kcal_goal"]
+    chart = charts.bars([float(by[x]) if by[x] else None for x in dates], labs, "--c-food", unit=" kcal",
+                        goal=kg, label_every=every, faded=[x in fasting for x in dates],
+                        summary=f"Calories logged per day over {d} days" + (f". Dashed line is your goal of {kg:,.0f} kcal." if kg else ""))
+    avg = _avg([by[x] for x in logged]) or 0
     today_k = by.get(today, 0)
-    if ng["kcal_goal"] and today not in fasting:
-        gap = ng["kcal_goal"] - today_k
-        notes.append(("", f'Calories today: {today_k:,.0f} of {ng["kcal_goal"]:,.0f} kcal, '
-                          f'{abs(gap):,.0f} {"left" if gap >= 0 else "over"}.'))
-    if ng["protein_goal"]:
-        notes.append(("", f'Protein today: {prot.get(today, 0):.0f} of {ng["protein_goal"]:.0f} g.'))
-    if ng["salt_limit"]:
-        notes.append(("", f'Salt today: {salt.get(today, 0):.1f} g (your limit is {ng["salt_limit"]:g} g).'))
+    meters = []
+    if today in fasting:
+        meters.append(f'<p class="m" style="margin:0">Fasting day. {today_k:,.0f} kcal logged so far.</p>')
+    else:
+        if kg:
+            meters.append(_meter("Calories", today_k, kg, "kcal", tint="--c-food"))
+        if ng["protein_goal"]:
+            meters.append(_meter("Protein", prot.get(today, 0), ng["protein_goal"], "g", tint="--c-steps"))
+        if ng["salt_limit"]:
+            meters.append(_meter("Salt", salt.get(today, 0), ng["salt_limit"], "g", tint="--c-weight", limit=True, digits=1))
+    today_card = (f'<div class="card"><h2>Today</h2>{"".join(meters)}</div>' if meters else
+                  '<div class="card"><h2>Today</h2><p class="m" style="margin:0">Set calorie, protein and salt goals in '
+                  '<a href="/settings">Settings</a> to see how much is left today.</p></div>')
+    notes = []
     if fasting:
-        notes.append(("", f'{len(fasting)} fasting day{"s" if len(fasting) != 1 else ""} marked in this period.'))
+        notes.append(("", f'{len(fasting)} fasting day{"s" if len(fasting) != 1 else ""} marked in this period (lighter bars).'))
     saltavg = _avg([salt[x] for x in logged if x in salt])
     if saltavg:
-        notes.append(("", f'Average salt about {saltavg:.1f} g a day in what you logged. The usual adult guideline is under 6 g.'))
+        notes.append(("", f'Salt averages about {saltavg:.1f} g on days you logged. The usual adult guideline is under 6 g.'))
     notes.append(("", "Days with nothing logged are left out of the averages."))
-    rows = [(_when(store, e["time"]), e["name"], f'{e["kcal"]} kcal',
-             _delete(csrf, "nutrition", e["id"]) if e["source"] == "manual" else "") for e in reversed(es[-20:])]
+    # entries grouped by day, each with the meal it belongs to
+    recent_days = sorted({e["_day"] for e in es}, reverse=True)[:7]
+    groups = []
+    for day in recent_days:
+        items = [e for e in es if e["_day"] == day]
+        title = "Today" if day == today else "Yesterday" if day == today - timedelta(days=1) else _day(day)
+        rows = [(e["name"], f'{_meal(int(e["time"][11:13]))} · {e["time"][11:16]}'
+                 + (f' · {e["protein_g"]:.0f} g protein' if e["protein_g"] else ""), f'{e["kcal"]} kcal',
+                 _delete(csrf, "nutrition", e["id"]) if e["source"] == "manual" else "") for e in items]
+        groups.append(f'<div class="dayh"><span>{esc(title)}</span><span>{sum(e["kcal"] for e in items):,} kcal</span></div>{_rows(rows)}')
     if today in fasting:
         delta = "Fasting day"
-    elif ng["kcal_goal"]:
-        delta = f'Goal {ng["kcal_goal"]:,.0f} kcal · average {avg:,.0f}'
+    elif kg:
+        delta = f'Goal {kg:,.0f} kcal'
     else:
-        delta = f"Daily average {avg:,.0f} kcal"
+        delta = "Calories logged today"
     return (head + f'<div class="hero1">{today_k:,}<small>kcal today</small></div>'
-            f'<div class="delta">{delta}</div>'
+            f'<div class="delta">{delta}</div>' + today_card
             + chips("/food", d) + f'<div class="card">{chart}</div>'
-            + stats([("Average", f"{avg:,.0f}"), ("Protein", f"{_avg([prot[x] for x in logged if x in prot]) or 0:.0f} g"),
+            + stats([("Avg per logged day", f"{avg:,.0f}"), ("Days logged", f"{sum(1 for x in dates if by[x])}/{d}"),
                      ("Entries", str(len(es)))])
-            + _notes(notes) + f'<div class="card"><h2>Recent entries</h2>{_rows(rows) if rows else "<p class=m>No entries.</p>"}</div>'
+            + _notes(notes) + f'<div class="card"><h2>Meals</h2>{"".join(groups) if groups else "<p class=m>No entries.</p>"}</div>'
             + '<p style="margin:0 0 14px"><a class="cta" href="/log">Log a meal</a></p>')
 
 
@@ -444,13 +571,15 @@ def activity_page(store: Store, d: int) -> str:
     chart = charts.bars([float(per[x]) if per[x] else None for x in dates], labs, "--c-work", unit=" min",
                         label_every=every, faded=[False] * len(dates), summary=f"Workout minutes per day over {d} days")
     total = sum(w["minutes"] for w in ws)
-    km = sum(w["distance_km"] or 0 for w in ws)
+    def _dist(w: dict[str, Any]) -> float:
+        return 0.0 if any(k in w["type"].lower() for k in ("strength", "weight", "gym")) else (w.get("distance_km") or 0.0)
+    km = sum(_dist(w) for w in ws)
     active_days = sum(1 for v in per.values() if v)
     rows = []
     for w in reversed(ws[-20:]):
         bits = [f'{w["minutes"]} min']
-        if w.get("distance_km"):
-            bits.append(f'{w["distance_km"]:.1f} km')
+        if _dist(w) >= 0.05:
+            bits.append(f'{_dist(w):.1f} km')
         if w.get("avg_hr"):
             bits.append(f'avg {w["avg_hr"]} bpm')
         kc = w.get("kcal_above_resting_estimate") or w.get("active_kcal_estimate")
@@ -460,6 +589,6 @@ def activity_page(store: Store, d: int) -> str:
             f'<div class="delta">{hm(total * 60)} in the last {d} days</div>'
             + chips("/activity", d) + f'<div class="card">{chart}</div>'
             + stats([("Active days", f"{active_days}/{d}"), ("Total time", hm_short(total * 60)),
-                     ("Distance", f"{km:.1f} km")])
+                     ("Distance", f"{km:.1f} km" if km >= 0.05 else "Longest " + hm_short(max(w["minutes"] for w in ws) * 60))])
             + _notes([("", f'About {total / max(d / 7, 1):.0f} minutes of workouts a week. The UK guideline for adults is 150 minutes of moderate activity a week.')])
             + f'<div class="card"><h2>Sessions</h2>{_rows(rows)}</div>')
