@@ -137,7 +137,9 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
     def headers(resp: Response) -> Response:
         resp.headers["Content-Security-Policy"] = CSP
         resp.headers["X-Content-Type-Options"] = "nosniff"
-        resp.headers["Referrer-Policy"] = "no-referrer"
+        # "no-referrer" makes browsers send "Origin: null" on form posts, which the Origin check refuses.
+        # "same-origin" sends the real origin to this site only and nothing to other sites.
+        resp.headers["Referrer-Policy"] = "same-origin"
         resp.headers["Cache-Control"] = "no-store"
         return resp
 

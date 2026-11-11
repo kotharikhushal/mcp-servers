@@ -318,3 +318,14 @@ def test_new_pages_need_sign_in(env):
         assert c.get(path).status_code == 303
     for path in ("/settings/reminders", "/settings/test", "/settings/context", "/import"):
         assert c.post(path, data={}).status_code == 401
+
+
+def test_referrer_policy_lets_browsers_send_a_real_origin_on_form_posts(env):
+    c, _, _ = env
+    signed_in(c)
+    assert c.get("/log").headers["referrer-policy"] == "same-origin"
+    # a browser form post under the policy carries the site's own origin and is accepted
+    ok = c.post("/log/weight", data={"kg": "70", "csrf": "tok"}, headers={"origin": BASE})
+    assert ok.status_code == 303 and "ok=" in ok.headers["location"]
+    # "null" is what a browser sends under no-referrer: refused, so the header must never go back
+    assert c.post("/log/weight", data={"kg": "71", "csrf": "tok"}, headers={"origin": "null"}).status_code == 403
