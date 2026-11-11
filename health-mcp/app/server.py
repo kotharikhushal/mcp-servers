@@ -145,12 +145,30 @@ def create(env: Mapping[str, str] = os.environ) -> tuple[FastMCP, Store, OIDCVer
     return mcp, store, verifier
 
 
+def start_web(env: Mapping[str, str], store: Store) -> None:
+    """Run the wellness web app on its own port in a background thread (opt-in)."""
+    import threading
+
+    import uvicorn
+
+    from . import web
+
+    app = web.build(env, primary=store)
+    if app is None:
+        return
+    cfg = uvicorn.Config(app, host=env.get("HOST", "0.0.0.0"), port=int(env.get("WEB_PORT", "8001")),
+                         log_level="warning", proxy_headers=True, forwarded_allow_ips="*")
+    threading.Thread(target=uvicorn.Server(cfg).run, name="web", daemon=True).start()
+    log.info("web app listening on port %s", cfg.port)
+
+
 def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
     try:
-        mcp, _, _ = create()
-    except ConfigError as e:
+        mcp, store, _ = create()
+        start_web(os.environ, store)
+    except (ConfigError, RuntimeError) as e:
         raise SystemExit(f"Configuration error: {e}") from e
     mcp.run(transport="streamable-http")
 

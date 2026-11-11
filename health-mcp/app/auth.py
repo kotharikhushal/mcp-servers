@@ -118,7 +118,8 @@ class OIDCVerifier:
         return AccessToken(token=token, client_id=str(claims.get("client_id") or claims.get("azp") or sub),
                            scopes=scopes, expires_at=int(exp) if exp else None, subject=sub or None)
 
-    async def _verify_jwt(self, token: str) -> AccessToken | None:
+    async def claims_from_jwt(self, token: str) -> dict[str, Any] | None:
+        """Verified claims of a signed JWT (signature, exp, nbf, iss, aud), or None."""
         jwks = await self._get_jwks()
         try:
             decoded = jwt.decode(token, KeySet.import_key_set(jwks), algorithms=ALLOWED_ALGS)
@@ -145,7 +146,11 @@ class OIDCVerifier:
         if self.audience not in _aud_list(c.get("aud")):
             log.warning("JWT audience mismatch")
             return None
-        return self._finish(token, c)
+        return c
+
+    async def _verify_jwt(self, token: str) -> AccessToken | None:
+        c = await self.claims_from_jwt(token)
+        return self._finish(token, c) if c is not None else None
 
     async def _verify_opaque(self, token: str) -> AccessToken | None:
         key = hashlib.sha256(token.encode()).hexdigest()
