@@ -9,6 +9,7 @@ leniently and anything that cannot be read is reported as missing rather than gu
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from datetime import date, timedelta
 from typing import Any, Mapping
@@ -488,6 +489,40 @@ class Mealie:
                         "recipe": rec.get("name") or e.get("title"), "slug": rec.get("slug"), "note": e.get("text") or None})
         return sorted(out, key=lambda x: (x["date"] or "", ENTRY_TYPES.index(x["meal"]) if x["meal"] in ENTRY_TYPES else 9))
 
+    def swap_options(self, target_kcal: float | None, query: str = "", exclude_slug: str | None = None,
+                     limit: int = 12) -> list[dict[str, Any]]:
+        """Recipes with calories filled in, closest to the planned meal's calories first."""
+        q = query.strip().lower()
+        cache = self.__dict__.setdefault("_swap_cache", {})
+        now = time.monotonic()
+        out = []
+        for r in self.all_recipes():
+            slug = r.get("slug")
+            if not slug or slug == exclude_slug or (q and q not in str(r.get("name", "")).lower()):
+                continue
+            hit = cache.get(slug)
+            if not hit or now - hit[0] > 600:
+                hit = (now, self.recipe(str(slug)))
+                cache[slug] = hit
+            n = hit[1].get("nutrition_per_serving") or {}
+            if "kcal" in n:
+                out.append({"slug": slug, "name": hit[1]["name"], "per_serving": n})
+        out.sort(key=lambda x: abs(x["per_serving"]["kcal"] - target_kcal) if target_kcal else x["name"])
+        return out[:max(1, min(limit, 30))]
+
+    def swap_plan_entry(self, entry_id: str, slug: str) -> dict[str, Any]:
+        """Replace the recipe on a meal plan entry, keeping its date and meal slot."""
+        eid = safe_id(entry_id, "meal plan entry id")
+        rec = self.recipe(slug)
+        cur = self._call("GET", f"{self._plans_path()}/{eid}")
+        body = {k: cur.get(k) for k in ("id", "groupId", "userId", "householdId", "date", "entryType") if k in cur}
+        body.update({"recipeId": rec["id"], "title": "", "text": ""})
+        self._call("PUT", f"{self._plans_path()}/{eid}", json=body)
+        back = self._call("GET", f"{self._plans_path()}/{eid}")
+        if str(back.get("recipeId") or (back.get("recipe") or {}).get("id")) != str(rec["id"]):
+            raise MealieError("Mealie accepted the request but the meal was not changed.")
+        return {"id": eid, "date": str(back.get("date"))[:10], "meal": back.get("entryType"), "recipe": rec["name"]}
+
     def day_menu(self, day: date) -> list[dict[str, Any]]:
         """What is planned for one day, with each recipe's nutrition per serving (for the wellness app)."""
         out, cache = [], {}
@@ -764,6 +799,12 @@ def register(mcp: Any, store: Any, mealie: Mealie, parse_when: Any, read: Any, w
             for day in res["days"]:
                 day["fasting"] = date.fromisoformat(day["date"]) in fasting
         return res
+
+    @mcp.tool(annotations=write)
+    def swap_meal_plan_entry(entry_id: str, recipe_slug: str) -> dict[str, Any]:
+        """Replace the recipe on a meal plan entry with another recipe, keeping its date and meal slot.
+        Ids come from get_meal_plan; slugs from search_recipes."""
+        return guard(lambda: mealie.swap_plan_entry(entry_id, recipe_slug))
 
     @mcp.tool(annotations=write)
     def move_meal_plan_entry(entry_id: str, date_iso: str, meal: str | None = None) -> dict[str, Any]:

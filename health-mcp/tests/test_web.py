@@ -544,3 +544,39 @@ def test_weekly_fasting_days_and_log_again(env):
     k.log_meal("Greek yoghurt", 150, 15, None, None, None, None, 0.2, None)
     log = c.get("/log").text
     assert "Recent meals" in log and "Log again" in log
+
+
+class SwapStub(StubMealie):
+    def __init__(self):
+        super().__init__()
+        self.swapped = None
+
+    def swap_options(self, kcal, q, slug):
+        return [{"slug": "soup", "name": "Lentil soup", "per_serving": {"kcal": 450, "protein_g": 20}}]
+
+    def swap_plan_entry(self, eid, slug):
+        self.swapped = (eid, slug)
+        return {"recipe": "Lentil soup"}
+
+
+def test_a_planned_meal_can_be_swapped_for_another_recipe(tmp_path):
+    stub = SwapStub()
+    c, _ = mealie_env(tmp_path, stub)
+    assert "/meals/swap?entry_id=e1" in c.get("/").text
+    page = c.get("/meals/swap?entry_id=e1").text
+    assert "Lentil soup" in page and "170 kcal less" not in page and "−170 kcal vs planned" in page
+    r = c.post("/meals/swap", data={"csrf": "tok", "entry_id": "e1", "slug": "soup"})
+    assert "ok=" in r.headers["location"] and stub.swapped == ("e1", "soup")
+    assert c.get("/meals/swap?entry_id=zzz").headers["location"].startswith("/?err=")
+    assert c.post("/meals/swap", data={"entry_id": "e1", "slug": "soup"}).status_code in (400, 403)
+
+
+def test_log_page_is_split_into_tabs(env):
+    c, _, _ = env
+    signed_in(c)
+    meal, bp = c.get("/log").text, c.get("/log?t=bp").text
+    assert 'action="/log/meal"' in meal and 'action="/log/bp"' not in meal
+    assert 'action="/log/bp"' in bp and 'action="/log/meal"' not in bp
+    assert 'action="/log/weight"' in c.get("/log?t=weight").text and 'action="/log/meal"' in c.get("/log?t=nonsense").text
+    r = c.post("/log/bp", data={"csrf": "tok", "systolic": "120", "diastolic": "80"})
+    assert r.headers["location"].startswith("/log?t=bp&ok=")
