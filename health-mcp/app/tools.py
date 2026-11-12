@@ -308,6 +308,23 @@ def register(mcp: FastMCP, store: Store) -> None:
         return {"fasting_weekdays": [names[i].capitalize() for i in sorted(days)]}
 
     @mcp.tool(annotations=WRITE)
+    def set_ai_analysis(headline: str, points: list[str]) -> dict[str, Any]:
+        """Save the AI analysis the wellness app shows at the top of its home page (replaces the previous one).
+        Write it from the person's own data only (call health_summary and the detail tools first): a one-line
+        headline and up to 5 short points on trends, what is going well and one or two things to try. Report and
+        encourage; never diagnose, and say when data is thin. Pass `person` so it lands on the right account."""
+        import json
+        headline = " ".join((headline or "").split())
+        pts = [" ".join(str(x).split()) for x in (points or []) if str(x).strip()]
+        if not headline or len(headline) > 160:
+            return {"error": "Give a headline of up to 160 characters."}
+        if not 1 <= len(pts) <= 5 or any(len(x) > 320 for x in pts):
+            return {"error": "Give 1 to 5 points of up to 320 characters each."}
+        at = store.now().isoformat()
+        store.set_setting("ai_analysis", json.dumps({"headline": headline, "points": pts, "at": at}))
+        return {"saved": True, "at": store.local_str(at)}
+
+    @mcp.tool(annotations=WRITE)
     def set_gp_note(text: str | None) -> dict[str, Any]:
         """Save (or clear with null) the context note shown at the top of the GP report, for example medication
         start dates. Only text the user gave."""

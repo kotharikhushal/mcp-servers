@@ -597,3 +597,4 @@ def test_each_person_picks_a_mode_and_colour_theme_and_the_font_is_served(env):
     f = c.get("/fonts/bricolage-grotesque.woff2")
     assert f.status_code == 200 and f.headers["content-type"] == "font/woff2" and f.content[:4] == b"wOF2"
     assert "font-src 'self'" in c.get("/").headers["content-security-policy"]
+

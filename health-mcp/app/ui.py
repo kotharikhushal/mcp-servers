@@ -107,6 +107,7 @@ a.tile:active{transform:scale(.985)}
 .tile .val small{font-size:14px;font-weight:600;color:var(--muted);margin-left:4px;letter-spacing:0}
 .tile .sub{font-size:13px;color:var(--muted);line-height:1.3}
 .tile .spark{position:absolute;right:12px;bottom:12px;width:44%;height:34px}
+.card.ai .aih{font-size:19px;font-weight:700;letter-spacing:-.02em;line-height:1.25;margin:2px 0 8px}.card.ai .aip{margin:0 0 8px;padding-left:20px;display:grid;gap:6px;line-height:1.4}.card.ai .aip li::marker{color:var(--accent)}
 .tile.wide{grid-column:1/-1}
 .tile .go{margin-top:6px;font-weight:650;color:var(--tc)}
 /* detail */

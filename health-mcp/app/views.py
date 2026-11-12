@@ -5,7 +5,7 @@ Notes are rules over the person's own numbers: data, not diagnosis.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Sequence
 
 from . import charts
@@ -209,6 +209,28 @@ def meals_card(store: Store, menu: list[dict[str, Any]] | None, error: bool, csr
             f'<p class="m" style="margin:10px 0 0">{esc(foot)}</p></div>')
 
 
+def _ai_card(store: Store) -> str:
+    """The latest AI analysis saved through the connector, or nothing if none yet."""
+    import json
+    raw = store.get_setting("ai_analysis")
+    if not raw:
+        return ""
+    try:
+        a = json.loads(raw)
+        when = datetime.fromisoformat(a["at"])
+        head, pts = str(a["headline"]), [str(x) for x in a["points"]]
+    except (ValueError, KeyError, TypeError):
+        return ""
+    age_h = (store.now() - when).total_seconds() / 3600
+    lbl = store.local(when).strftime("%a %H:%M")
+    stale = ' <span class="pill">Older</span>' if age_h > 36 else ""
+    items = "".join(f"<li>{esc(x)}</li>" for x in pts)
+    return (f'<div class="card ai"><h2>AI analysis{stale}</h2><p class="aih">{esc(head)}</p>'
+            f'<ul class="aip">{items}</ul>'
+            f'<p class="m">Written by Claude from your own data, {esc(lbl)}. Not a diagnosis. '
+            'Ask Claude to refresh it.</p></div>')
+
+
 def today_page(store: Store, name: str, menu: list[dict[str, Any]] | None = None, menu_error: bool = False,
                csrf: str = "") -> str:
     now = store.local(store.now())
@@ -234,6 +256,7 @@ def today_page(store: Store, name: str, menu: list[dict[str, Any]] | None = None
     coach = (f'<div class="card coach"><div class="face" aria-hidden="true">C</div><div class="notes">'
              f'<h2>Coach notes</h2>{notes}</div></div>')
 
+    coach = _ai_card(store) + coach
     meals = meals_card(store, menu, menu_error, csrf)
     tiles = []
     hb = store.heart_by_day(7)

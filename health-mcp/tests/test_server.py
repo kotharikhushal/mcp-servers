@@ -106,3 +106,22 @@ def test_tools_take_a_person_so_two_people_can_share_one_claude_account(tmp_path
     with pytest.raises(Exception) as e:
         call(mcp, "get_weight", days=7, person="stranger")
     assert "Use one of: khushal, shivani" in str(e.value)
+
+
+def test_ai_analysis_is_saved_per_person_and_shown_on_the_home_page(tmp_path):
+    from app import views
+    from tests.test_mealie import BASE, call
+    mcp, k, _ = server.create(dict(BASE, DATA_DIR=str(tmp_path), WEB_USERS="khushal:Khushal,shivani:Shivani"))
+    assert "AI analysis" not in views.today_page(k, "Khushal")
+    out = call(mcp, "set_ai_analysis", headline="Steady week", points=["Weight is down 0.5 kg", "Evening BP is higher"])
+    assert out["saved"]
+    page = views.today_page(k, "Khushal")
+    assert "AI analysis" in page and "Steady week" in page and "Evening BP is higher" in page and "Not a diagnosis" in page
+    call(mcp, "set_ai_analysis", headline="Her week", points=["Sleep is regular"], person="shivani")
+    assert "Her week" not in views.today_page(k, "Khushal")
+    for bad in ({"headline": "", "points": ["x"]}, {"headline": "ok", "points": []}, {"headline": "ok", "points": ["y"] * 6}):
+        assert "error" in call(mcp, "set_ai_analysis", **bad)
+    page = views.today_page(k, "Khushal")
+    assert "<script" not in page
+    call(mcp, "set_ai_analysis", headline="<script>x</script>", points=["a"])
+    assert "<script>x" not in views.today_page(k, "Khushal")
