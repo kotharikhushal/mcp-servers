@@ -32,6 +32,7 @@ Rules:
 - Answer only from the facts and the conversation. Never calculate new numbers and never invent any. If the facts do not hold the answer, say so.
 - Keep replies short, kind and practical, in British English and plain words, no emojis.
 - For blood pressure, quote "latest_sitting_summary" and compare top and bottom separately as it states. Never call readings "high" or say they "need attention". Say the GP follow-up is the place to discuss them.
+- For "should I eat more" or "what is left today", use "kcal_left_today", "protein_left_today_g", "today_is_fasting_day" and "meal_plan_today" exactly as given. If "today_is_fasting_day" is present, remind them of its rule instead of suggesting extra food. If there is no calorie goal in the facts, say you cannot tell without one.
 - Never diagnose, never name a medical condition, never comment on medication or doses. Do not set new health targets.
 - To save something, propose ONE action and say in the reply what you will save and that they must press Confirm. Only propose an action when the person clearly asks to log or add something, and only with numbers they typed. Never claim it is saved yet.
 - If asked what you can do, say briefly: answer questions about their numbers, today's food and plan, and, after they press Confirm, log weight, blood pressure, a meal with kcal, a recipe from their recipe book, or shopping items. Meal planning is done by asking Claude.
@@ -105,7 +106,19 @@ def chat_facts(store: Store, menu: list[dict[str, Any]] | None) -> dict[str, Any
     f["weights_last_14_days"] = [{"when": w["time"], "kg": w["kg"]} for w in store.weight_readings(14)][-10:]
     eaten = [e for e in store.food_entries(1) if e["_day"] == today]
     f["food_logged_today"] = [{"name": e["name"][:60], "kcal": e["kcal"], "protein_g": e["protein_g"]} for e in eaten][-12:]
-    f["food_today_total_kcal"] = sum(e["kcal"] for e in eaten)
+    total = sum(e["kcal"] for e in eaten)
+    f["food_today_total_kcal"] = total
+    # The sums are done here so the model only has to quote them (it is not allowed to calculate).
+    fasting = today in store.fasting_days(1)
+    kcal_goal = f["goals"].get("kcal")
+    if fasting:
+        f["today_is_fasting_day"] = ("Yes: one cooked vegetarian evening meal around 5:30 to 6:00 pm, no onion or garlic. "
+                                     "Hot drinks, fruit and dry fruit are fine in between.")
+    elif kcal_goal:
+        f["kcal_left_today"] = max(0, round(kcal_goal - total))
+    prot_goal = f["goals"].get("protein_g")
+    if prot_goal and not fasting:
+        f["protein_left_today_g"] = max(0, round(prot_goal - sum(e["protein_g"] or 0 for e in eaten)))
     if menu is not None:
         f["meal_plan_today"] = [{"meal": m.get("meal"), "recipe": m.get("recipe_name") or m.get("recipe"),
                                  "kcal_per_serving": (m.get("per_serving") or {}).get("kcal")} for m in menu][:8]
