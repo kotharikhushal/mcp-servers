@@ -858,3 +858,19 @@ def test_chat_estimated_meal_is_editable_marked_and_reuses_your_earlier_entry(tm
     assert again["kcal"] == 275 and again["from_history"] and "before" in again["summary"]
     typed = chat.check_action({"kind": "log_meal", "name": "Toast", "kcal": 180}, "toast 180 kcal")
     assert typed["estimate"] is False and typed["name"] == "Toast"
+
+
+def test_chat_facts_hold_the_calories_left_so_the_model_need_not_calculate(tmp_path):
+    from app import chat
+    from app.store import Store
+    st = Store(str(tmp_path / "c.db"), tz="Europe/London")
+    st.set_setting("kcal_goal", "1500")
+    st.set_setting("protein_goal", "80")
+    st.log_meal("Bananas and tea", 300, 4.0, None, None, None, None, None, None)
+    f = chat.chat_facts(st, None)
+    assert f["food_today_total_kcal"] == 300 and f["kcal_left_today"] == 1200 and f["protein_left_today_g"] == 76
+    assert chat.reply_problems("You have 1200 kcal left today.", f, "Should I eat more today?", None) == []
+    assert any("not in the facts" in p for p in chat.reply_problems("You have 1001 kcal left.", f, "x", None))
+    st.set_fasting(st.local(st.now()).date(), True)
+    g = chat.chat_facts(st, None)
+    assert "today_is_fasting_day" in g and "kcal_left_today" not in g
