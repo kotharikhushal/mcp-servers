@@ -35,7 +35,7 @@ Rules:
 - Never diagnose, never name a medical condition, never comment on medication or doses. Do not set new health targets.
 - To save something, propose ONE action and say in the reply what you will save and that they must press Confirm. Only propose an action when the person clearly asks to log or add something, and only with numbers they typed. Never claim it is saved yet.
 - If asked what you can do, say briefly: answer questions about their numbers, today's food and plan, and, after they press Confirm, log weight, blood pressure, a meal with kcal, a recipe from their recipe book, or shopping items. Meal planning is done by asking Claude.
-- Actions: log_weight (kg), log_bp (systolic, diastolic, optional pulse), log_meal (name, kcal, optional protein_g, salt_g; only when they gave the kcal), log_recipe (recipe = words to find it in their recipe book, servings), add_shopping (items = list of short item names). Otherwise use "none".
+- Actions: log_weight (kg), log_bp (systolic, diastolic, optional pulse), log_meal (name, kcal, optional protein_g, salt_g). If they gave no kcal, still propose log_meal with your best estimate of kcal for the whole meal and "estimate": true, and say in the reply it is an estimate they can edit before confirming. If they gave kcal, use exactly theirs. log_recipe (recipe = words to find it in their recipe book, servings), add_shopping (items = list of short item names). Otherwise use "none".
 Return JSON only: {"reply": string up to 500 characters, "action": {"kind": one of none|log_weight|log_bp|log_meal|log_recipe|add_shopping, plus the fields that action needs}}."""
 
 SCHEMA = {
@@ -47,7 +47,7 @@ SCHEMA = {
             "kg": {"type": "number"}, "systolic": {"type": "number"}, "diastolic": {"type": "number"},
             "pulse": {"type": "number"}, "name": {"type": "string"}, "kcal": {"type": "number"},
             "protein_g": {"type": "number"}, "salt_g": {"type": "number"},
-            "recipe": {"type": "string"}, "servings": {"type": "number"},
+            "recipe": {"type": "string"}, "servings": {"type": "number"}, "estimate": {"type": "boolean"},
             "items": {"type": "array", "items": {"type": "string"}}},
             "required": ["kind"]}},
     "required": ["reply", "action"]}
@@ -164,11 +164,22 @@ def check_action(a: Any, user_text: str) -> dict[str, Any] | None:
         name = " ".join(str(a.get("name", "")).split())[:100]
         if not name:
             raise ValueError("missing meal name")
-        kcal = _num(a, "kcal", 0, 5000, typed)
-        prot = _num(a, "protein_g", 0, 500, typed, required=False)
-        salt = _num(a, "salt_g", 0, 50, typed, required=False)
-        return {"kind": kind, "name": name, "kcal": kcal, "protein_g": prot, "salt_g": salt,
-                "summary": f"Save meal \"{name}\", {kcal:g} kcal"}
+        kv = a.get("kcal")
+        typed_kcal = isinstance(kv, (int, float)) and not isinstance(kv, bool) and any(abs(kv - t) < 1e-9 for t in typed)
+        if typed_kcal:
+            kcal = _num(a, "kcal", 0, 5000, typed)
+            prot = _num(a, "protein_g", 0, 500, typed, required=False)
+            salt = _num(a, "salt_g", 0, 50, typed, required=False)
+            return {"kind": kind, "name": name, "kcal": kcal, "protein_g": prot, "salt_g": salt, "estimate": False,
+                    "summary": f"Save meal \"{name}\", {kcal:g} kcal"}
+        if isinstance(kv, bool) or not isinstance(kv, (int, float)) or not 20 <= kv <= 3000:
+            raise ValueError("no usable kcal")
+        if not name.lower().endswith("(estimate)"):
+            name = name[:88] + " (estimate)"
+        prot = a.get("protein_g")
+        prot = float(prot) if isinstance(prot, (int, float)) and not isinstance(prot, bool) and 0 <= prot <= 300 else None
+        return {"kind": kind, "name": name, "kcal": round(float(kv)), "protein_g": prot, "salt_g": None, "estimate": True,
+                "summary": f"Save meal \"{name}\", about {round(float(kv))} kcal. This is an estimate: check the number below."}
     if kind == "log_recipe":
         q = " ".join(str(a.get("recipe", "")).split())[:80]
         if not q:
@@ -292,6 +303,18 @@ def execute(store: Store, mealie: Any, p: dict[str, Any]) -> str:
         res = mealie.add_shopping_items(p["list_id"], p["items"])
         return f"Added {res['added']} item(s) to {p['list_name']}"
     raise ValueError("unknown action")
+
+
+def reuse_history(store: Store, a: dict[str, Any]) -> dict[str, Any]:
+    """An estimated meal you have logged before is saved with your own earlier numbers instead of the model's guess."""
+    if a["kind"] != "log_meal" or not a.get("estimate"):
+        return a
+    base = re.sub(r"\s*\(estimate\)\s*$", "", a["name"], flags=re.I).strip().lower()
+    for e in reversed(store.food_entries(90)):
+        if re.sub(r"\s*\(estimate\)\s*$", "", e["name"], flags=re.I).strip().lower() == base and e["kcal"]:
+            return {**a, "kcal": e["kcal"], "protein_g": e["protein_g"], "salt_g": e["salt_g"], "from_history": True,
+                    "summary": f"Save meal \"{a['name']}\", {e['kcal']} kcal, copied from when you logged it before. Check the number below."}
+    return a
 
 
 def resolve(mealie: Any, a: dict[str, Any]) -> dict[str, Any]:

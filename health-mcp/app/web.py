@@ -315,6 +315,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             async with httpx.AsyncClient(timeout=180) as c:
                 reply, action = await chat_mod.respond(c, ollama_url, ollama_model, facts, history, text)
             if action:
+                action = chat_mod.reuse_history(store, action)
                 action = await asyncio.to_thread(chat_mod.resolve, mealie, action)
         except (chat_mod.ChatError, mealie_mod.MealieError) as e:
             log.warning("chat failed for %s: %s", s["u"], e)
@@ -329,6 +330,14 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         p = chat_mod.load_pending(store)
         if not p or not hmac.compare_digest(str(request.state.form.get("id", "")), str(p["id"])):
             return back("That suggestion is no longer waiting", True, "/chat")
+        if p["kind"] == "log_meal" and p.get("estimate"):
+            try:
+                kcal = float(str(request.state.form.get("kcal", "")).replace(",", ".").strip())
+                if not 0 <= kcal <= 5000:
+                    raise ValueError
+            except ValueError:
+                return back("Enter the calories as a number (0 to 5000)", True, "/chat")
+            p = {**p, "kcal": round(kcal)}
         chat_mod.clear_pending(store)       # cleared first, so a double tap cannot save twice
         try:
             msg = await asyncio.to_thread(chat_mod.execute, store, mealie, p)
