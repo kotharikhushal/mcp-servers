@@ -34,6 +34,7 @@ Rules:
 - For blood pressure, quote "latest_sitting_summary" and compare top and bottom separately as it states. Never call readings "high" or say they "need attention". Say the GP follow-up is the place to discuss them.
 - Never diagnose, never name a medical condition, never comment on medication or doses. Do not set new health targets.
 - To save something, propose ONE action and say in the reply what you will save and that they must press Confirm. Only propose an action when the person clearly asks to log or add something, and only with numbers they typed. Never claim it is saved yet.
+- If asked what you can do, say briefly: answer questions about their numbers, today's food and plan, and, after they press Confirm, log weight, blood pressure, a meal with kcal, a recipe from their recipe book, or shopping items. Meal planning is done by asking Claude.
 - Actions: log_weight (kg), log_bp (systolic, diastolic, optional pulse), log_meal (name, kcal, optional protein_g, salt_g; only when they gave the kcal), log_recipe (recipe = words to find it in their recipe book, servings), add_shopping (items = list of short item names). Otherwise use "none".
 Return JSON only: {"reply": string up to 500 characters, "action": {"kind": one of none|log_weight|log_bp|log_meal|log_recipe|add_shopping, plus the fields that action needs}}."""
 
@@ -217,7 +218,9 @@ def reply_problems(reply: Any, facts: dict[str, Any], user_text: str, action: di
         errs.append("diagnosis or medication wording")
     bp = facts.get("blood_pressure")
     if bp:
-        if re.search(r"blood pressure|\bBP\b|\d{2,3}/\d{2,3}", text, re.I) and not re.search(r"\bGP\b|doctor", text, re.I) \
+        reads_numbers = re.search(r"\d{2,3}/\d{2,3}", text) or (
+            re.search(r"blood pressure|\bBP\b", text, re.I) and re.search(r"\b(above|over|below|under|threshold|trend|improv|worse|better|reading)", text, re.I))
+        if reads_numbers and not re.search(r"\bGP\b|doctor", text, re.I) \
                 and not (action and action["kind"] == "log_bp"):
             errs.append("blood pressure without the GP")
         if bp["latest_sitting_mixed"]:

@@ -318,8 +318,6 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
                 action = await asyncio.to_thread(chat_mod.resolve, mealie, action)
         except (chat_mod.ChatError, mealie_mod.MealieError) as e:
             log.warning("chat failed for %s: %s", s["u"], e)
-            chat_mod.add_message(store, "user", text)
-            chat_mod.add_message(store, "note", str(e)[:300])
             return back(str(e)[:150], True, "/chat")
         chat_mod.add_message(store, "user", text)
         chat_mod.add_message(store, "bot", reply)

@@ -822,3 +822,12 @@ def test_refreshed_today_page_has_summary_chips_actions_and_plain_bp_status(env)
     assert 'class="card hero2"' in page and 'href="/sleep"' in page and 'href="/food"' in page
     assert "Bottom number over" in page                       # top 128 is under 135, bottom 104 is over 85
     assert 'href="/log"' in page and "Ask coach" not in page   # no local model, so no coach button
+
+
+def test_chat_only_demands_the_gp_when_the_reply_talks_about_readings():
+    from app import chat
+    f = {"blood_pressure": {"latest_sitting_summary": "x", "latest_sitting_mixed": False}}
+    assert chat.reply_problems("I can answer questions about your numbers, including blood pressure, and log things after you confirm.", f, "what can you do", None) == []
+    assert "blood pressure without the GP" in chat.reply_problems("Your blood pressure trend is improving.", f, "bp?", None)
+    assert "blood pressure without the GP" in chat.reply_problems("Your last sitting was 120/93.", f, "bp?", None)
+    assert chat.reply_problems("Your last sitting was 120/93. Discuss it with your GP.", f, "120/93", None) == []
