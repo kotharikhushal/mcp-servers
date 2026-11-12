@@ -495,7 +495,8 @@ def test_todays_planned_meals_can_be_logged_in_one_tap_and_skipped(tmp_path):
     home = c.get("/").text
     assert "Today's meals" in home and "Dal and rice" in home and "620 kcal" in home and "I ate this" in home
     r = c.post("/meals/eat", data={"csrf": "tok", "entry_id": "e1"})
-    assert "ok=" in r.headers["location"]
+    assert "ok=" in r.headers["location"] and r.headers["location"].endswith("#meals")   # stays on the meals card
+    assert 'id="meals"' in home
     k = stores.get("khushal")
     assert [e["name"] for e in k.food_entries(1)] == ["Dal and rice x1 (from Mealie)"] and k.food_entries(1)[0]["kcal"] == 620
     c.post("/meals/eat", data={"csrf": "tok", "entry_id": "e1"})   # a second tap must not log it twice
