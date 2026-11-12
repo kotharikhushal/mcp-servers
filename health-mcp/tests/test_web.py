@@ -597,3 +597,13 @@ def test_each_person_picks_a_mode_and_colour_theme_and_the_font_is_served(env):
     f = c.get("/fonts/bricolage-grotesque.woff2")
     assert f.status_code == 200 and f.headers["content-type"] == "font/woff2" and f.content[:4] == b"wOF2"
     assert "font-src 'self'" in c.get("/").headers["content-security-policy"]
+
+
+def test_bp_coach_note_names_the_number_that_is_high_and_uses_the_sitting_average():
+    from app.pages import bp_over_text
+    dia = bp_over_text({"systolic": 128, "diastolic": 102, "readings": [1, 2]})
+    assert "averaged 128/102" in dia and "bottom number is above the 85" in dia and "top number is under 135" in dia
+    sysh = bp_over_text({"systolic": 150, "diastolic": 80, "readings": [1]})
+    assert "last reading was 150/80" in sysh and "top number is above the 135" in sysh
+    both = bp_over_text({"systolic": 150, "diastolic": 95, "readings": [1]})
+    assert "Both numbers" in both

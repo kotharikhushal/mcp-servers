@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from typing import Any, Sequence
 
 from . import charts
-from .pages import BP_URGENT, HOME_BP_HIGH, goals, notes_for, nutrition_goals, when_label
+from .pages import BP_URGENT, bp_over_text, HOME_BP_HIGH, goals, notes_for, nutrition_goals, when_label
 from .store import Store
 from .tools import bp_stats
 from .ui import chips, esc, icon, legend, stats, tile
@@ -438,8 +438,7 @@ def bp_page(store: Store, csrf: str, d: int) -> str:
         notes.append(("bad", "Your last reading was very high. Contact your GP or NHS 111 today. With chest pain, breathlessness, "
                       "confusion or a severe headache, call 999."))
     elif last["systolic"] >= HOME_BP_HIGH[0] or last["diastolic"] >= HOME_BP_HIGH[1]:
-        notes.append(("warn", f'Your last sitting averaged above the {HOME_BP_HIGH[0]}/{HOME_BP_HIGH[1]} home threshold. '
-                      'Your GP looks at the pattern over several days, so keep logging morning and evening.'))
+        notes.append(("warn", bp_over_text(last) + " Your GP looks at the pattern over several days, so keep logging morning and evening."))
     notes.append(("", f'{above} of {len(rs)} sittings were at or above {HOME_BP_HIGH[0]}/{HOME_BP_HIGH[1]}.'
                   + (" Two readings a minute apart count as one sitting." if len(rs) < len(raw) else "")))
     if skip_first:
