@@ -230,3 +230,26 @@ def test_new_tools_through_mcp_with_batch_limits(tmp_path, monkeypatch):
     assert "error" in call(mcp, "add_recipes_to_shopping_list", list_id="L1", recipe_slugs=["a"], servings_multiplier=0)
     assert call(mcp, "add_recipes_to_shopping_list", list_id="L1", recipe_slugs=["aloo-gobi"])["added_recipes"] == ["aloo-gobi"]
     reset()
+
+
+def test_clients_from_env_gives_each_person_their_own_token():
+    env = {"MEALIE_URL": "https://m.example.com", "MEALIE_API_TOKEN": "khushal-tok", "MEALIE_TOKEN_BUNNY": "bunny-tok"}
+    c = mealie.clients_from_env(env, ["kuku", "bunny"], "kuku")
+    assert set(c) == {"kuku", "bunny"} and c["kuku"] is not c["bunny"]
+    assert mealie.clients_from_env({"MEALIE_URL": "https://m.example.com", "MEALIE_API_TOKEN": "t"}, ["kuku", "bunny"], "kuku").keys() == {"kuku"}
+    assert mealie.clients_from_env({}, ["kuku"], "kuku") == {}
+    for bad in ({"MEALIE_URL": "https://m"}, {"MEALIE_API_TOKEN": "t"}):
+        with pytest.raises(ValueError):
+            mealie.clients_from_env(bad, ["kuku"], "kuku")
+
+
+def test_by_person_uses_the_askers_client_and_errors_without_one():
+    class C:
+        def __init__(self, n): self.n = n
+        def status(self): return self.n
+    who = ["kuku"]
+    bp = mealie.ByPerson({"kuku": C("k")}, lambda: who[0])
+    assert bp.status() == "k"
+    who[0] = "bunny"
+    with pytest.raises(mealie.MealieError, match="MEALIE_TOKEN_BUNNY"):
+        bp.status()
