@@ -230,23 +230,23 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
 
     async def meals_eat(request: Request, s: dict[str, Any], store: Store) -> Response:
         if mealie_for(s["u"]) is None:
-            return back("Meal plan is not connected", True, "/")
+            return back("Meal plan is not connected", True, "/#meals")
         eid = str(request.state.form.get("entry_id", ""))
         try:
             menu = await asyncio.to_thread(load_menu, store, s["u"])
         except mealie_mod.MealieError as e:
-            return back(str(e), True, "/")
+            return back(str(e), True, "/#meals")
         m = next((x for x in menu if str(x["id"]) == eid), None)
         if not m or not m.get("_rec"):
-            return back("That meal is no longer in today's plan", True, "/")
+            return back("That meal is no longer in today's plan", True, "/#meals")
         name = m["_rec"]["name"]
         if any(e["name"].startswith(f"{name} x") for e in store.food_entries(1)
                if e["_day"] == store.local(store.now()).date()):
-            return back(f"{name} is already logged", False, "/")
+            return back(f"{name} is already logged", False, "/#meals")
         res = await asyncio.to_thread(mealie_mod.log_recipe_nutrition, store, m["_rec"], 1.0, None)
         if not res.get("logged"):
-            return back(res.get("reason", "Could not log that meal"), True, "/")
-        return back(f'Logged {name}, {res["kcal"]} kcal', False, "/")
+            return back(res.get("reason", "Could not log that meal"), True, "/#meals")
+        return back(f'Logged {name}, {res["kcal"]} kcal', False, "/#meals")
 
     async def swap_get(request: Request, s: dict[str, Any], store: Store) -> Response:
         eid = request.query_params.get("entry_id", "")
@@ -255,23 +255,23 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             menu = await asyncio.to_thread(load_menu, store, s["u"]) if mealie_for(s["u"]) is not None else []
             m = next((x for x in menu if str(x["id"]) == eid), None)
             if not m:
-                return back("That meal is no longer in today's plan", True, "/")
+                return back("That meal is no longer in today's plan", True, "/#meals")
             opts = await asyncio.to_thread(mealie_for(s["u"]).swap_options, (m.get("per_serving") or {}).get("kcal"), q, m.get("slug"))
         except mealie_mod.MealieError as e:
-            return back(str(e), True, "/")
+            return back(str(e), True, "/#meals")
         return page("Swap meal", views.swap_page(store, s["csrf"], m, opts, q), s, "/", request, back=("/", "Today"), tint="--c-food")
 
     async def swap_post(request: Request, s: dict[str, Any], store: Store) -> Response:
         f = request.state.form
         mc = mealie_for(s["u"])
         if mc is None:
-            return back("Meal plan is not connected", True, "/")
+            return back("Meal plan is not connected", True, "/#meals")
         try:
             res = await asyncio.to_thread(mc.swap_plan_entry, str(f.get("entry_id", "")), str(f.get("slug", "")))
         except mealie_mod.MealieError as e:
-            return back(str(e), True, "/")
+            return back(str(e), True, "/#meals")
         menu_cache.clear()
-        return back(f'Swapped to {res["recipe"]}', False, "/")
+        return back(f'Swapped to {res["recipe"]}', False, "/#meals")
 
     async def analysis_refresh(request: Request, s: dict[str, Any], store: Store) -> Response:
         if not ollama_url:
@@ -368,7 +368,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         f = request.state.form
         eid = str(f.get("entry_id", ""))
         if not eid.replace("-", "").replace("_", "").isalnum():
-            return back("Bad meal", True, "/")
+            return back("Bad meal", True, "/#meals")
         key = f"skip:{store.local(store.now()).date().isoformat()}"
         cur = {x for x in (store.get_setting(key) or "").split(",") if x}
         if str(f.get("on")) == "0":
@@ -376,7 +376,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         else:
             cur.add(eid)
         store.set_setting(key, ",".join(sorted(cur)) or None)
-        return back("Skipped" if str(f.get("on")) != "0" else "Skip removed", False, "/")
+        return back("Skipped" if str(f.get("on")) != "0" else "Skip removed", False, "/#meals")
 
     async def fasting_days_post(request: Request, s: dict[str, Any], store: Store) -> Response:
         vals = request.state.form.getlist("wd") if hasattr(request.state.form, "getlist") else []
@@ -421,7 +421,9 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         return page("Quick log", pages.log_page(store, s["csrf"], request.query_params.get("t", "meal")), s, "/log", request)
 
     def back(msg: str, err: bool = False, to: str = "/log") -> Response:
-        return RedirectResponse(to + ("&" if "?" in to else "?") + urlencode({"err" if err else "ok": msg}), status_code=303)
+        path, _, frag = to.partition("#")   # keep the position on the page (for example #meals)
+        return RedirectResponse(path + ("&" if "?" in path else "?") + urlencode({"err" if err else "ok": msg})
+                                + (f"#{frag}" if frag else ""), status_code=303)
 
     def num(form: Any, key: str, cast: Callable[[str], Any] = float) -> Any:
         v = str(form.get(key, "")).strip()

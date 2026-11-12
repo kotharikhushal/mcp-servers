@@ -82,7 +82,9 @@ h2{font-size:19px;letter-spacing:-.02em;font-weight:700;margin:0 0 10px}
 .note{border-radius:14px;background:var(--soft);padding:11px 14px;margin:8px 0;color:var(--ink);position:relative;padding-left:18px}
 .note::before{content:"";position:absolute;left:6px;top:10px;bottom:10px;width:4px;border-radius:4px;background:var(--accent)}
 .note.warn::before{background:var(--warn)}.note.bad::before{background:var(--bad)}
-.flash{padding:13px 16px;border-radius:16px;background:var(--soft);border:1px solid var(--accent);font-weight:650;margin:6px 0 14px}
+.flash{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:8;width:max-content;max-width:min(520px,calc(100% - 32px));box-sizing:border-box;padding:12px 18px;border-radius:999px;background:var(--bg);color:var(--ink);box-shadow:0 6px 24px rgba(0,0,0,.22);border:1px solid var(--accent);font-weight:650;text-align:center;animation:toast 4.5s ease forwards;pointer-events:none}
+@keyframes toast{0%{opacity:0;transform:translate(-50%,12px)}8%,82%{opacity:1;transform:translate(-50%,0)}100%{opacity:0;transform:translate(-50%,0);visibility:hidden}}
+#meals{scroll-margin-top:70px}
 .flash.err{background:var(--err-bg);color:var(--ink);border-color:var(--bad)}
 /* home */
 .greet{margin:10px 0 16px}.greet h1{margin:0;font-size:30px}.greet p{margin:4px 0 0;color:var(--ink2);font-weight:500}

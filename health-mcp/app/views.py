@@ -205,7 +205,7 @@ def meals_card(store: Store, menu: list[dict[str, Any]] | None, error: bool, csr
         foot += " · fasting day"
     elif ng["kcal_goal"]:
         foot += f' · goal {ng["kcal_goal"]:,.0f}'
-    return (f'<div class="card"><h2>Today\'s meals</h2><ul class="rows">{"".join(rows)}</ul>'
+    return (f'<div class="card" id="meals"><h2>Today\'s meals</h2><ul class="rows">{"".join(rows)}</ul>'
             f'<p class="m" style="margin:10px 0 0">{esc(foot)}</p></div>')
 
 
