@@ -103,10 +103,10 @@ a.tile{display:flex;flex-direction:column;gap:2px;min-height:144px;padding:16px;
 a.tile:active{transform:scale(.985)}
 .tile .lab{display:flex;align-items:center;gap:9px;font-weight:650;font-size:14px;color:var(--ink2)}
 .tile .lab svg{width:30px;height:30px;padding:6px;border-radius:10px;color:var(--tc);background:color-mix(in srgb,var(--tc) 15%,transparent);flex:none}
-.tile .val{font-size:34px;font-weight:780;letter-spacing:-.04em;line-height:1.05;margin-top:10px}
-.tile .val small{font-size:14px;font-weight:600;color:var(--muted);margin-left:4px;letter-spacing:0}
+.tile .val{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:5px;font-size:34px;font-weight:780;letter-spacing:-.04em;line-height:1.05;margin-top:10px}
+.tile .val small{font-size:14px;font-weight:600;color:var(--muted);margin-left:0;letter-spacing:0}
 .tile .sub{font-size:13px;color:var(--muted);line-height:1.3}
-.tile .spark{position:absolute;right:12px;bottom:12px;width:44%;height:34px}
+.tile .spark{display:block;width:100%;height:30px;margin-top:auto;padding-top:10px;box-sizing:content-box}.tile .spark-empty{margin-top:auto}
 .tile.wide{grid-column:1/-1}
 .tile .go{margin-top:6px;font-weight:650;color:var(--tc)}
 /* detail */
