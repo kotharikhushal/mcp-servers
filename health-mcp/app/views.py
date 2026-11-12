@@ -209,30 +209,35 @@ def meals_card(store: Store, menu: list[dict[str, Any]] | None, error: bool, csr
             f'<p class="m" style="margin:10px 0 0">{esc(foot)}</p></div>')
 
 
-def _ai_card(store: Store) -> str:
-    """The latest AI analysis saved through the connector, or nothing if none yet."""
+def _ai_card(store: Store, csrf: str = "", can_refresh: bool = False) -> str:
+    """The latest AI analysis (written by Claude through the connector, or by the local model), or nothing."""
     import json
+    btn = (f'<form method="post" action="/analysis/refresh" class="acts"><input type="hidden" name="csrf" value="{esc(csrf)}">'
+           '<button class="mini">Refresh analysis</button></form>') if can_refresh and csrf else ""
     raw = store.get_setting("ai_analysis")
-    if not raw:
-        return ""
+    a: dict[str, Any] = {}
     try:
-        a = json.loads(raw)
+        a = json.loads(raw) if raw else {}
         when = datetime.fromisoformat(a["at"])
         head, pts = str(a["headline"]), [str(x) for x in a["points"]]
     except (ValueError, KeyError, TypeError):
-        return ""
+        if not btn:
+            return ""
+        return ('<div class="card ai"><h2>AI analysis</h2><p class="m">No analysis yet. It is written from your own '
+                f'numbers and is not a diagnosis.</p>{btn}</div>')
     age_h = (store.now() - when).total_seconds() / 3600
     lbl = store.local(when).strftime("%a %H:%M")
     stale = ' <span class="pill">Older</span>' if age_h > 36 else ""
     items = "".join(f"<li>{esc(x)}</li>" for x in pts)
+    who = esc(str(a.get("source") or "Claude"))
+    tail = "" if btn else " Ask Claude to refresh it."
     return (f'<div class="card ai"><h2>AI analysis{stale}</h2><p class="aih">{esc(head)}</p>'
             f'<ul class="aip">{items}</ul>'
-            f'<p class="m">Written by Claude from your own data, {esc(lbl)}. Not a diagnosis. '
-            'Ask Claude to refresh it.</p></div>')
+            f'<p class="m">Written by {who} from your own data, {esc(lbl)}. Not a diagnosis.{tail}</p>{btn}</div>')
 
 
 def today_page(store: Store, name: str, menu: list[dict[str, Any]] | None = None, menu_error: bool = False,
-               csrf: str = "") -> str:
+               csrf: str = "", can_refresh_ai: bool = False) -> str:
     now = store.local(store.now())
     today = now.date()
     g = goals(store)
@@ -256,7 +261,7 @@ def today_page(store: Store, name: str, menu: list[dict[str, Any]] | None = None
     coach = (f'<div class="card coach"><div class="face" aria-hidden="true">C</div><div class="notes">'
              f'<h2>Coach notes</h2>{notes}</div></div>')
 
-    coach = _ai_card(store) + coach
+    coach = _ai_card(store, csrf, can_refresh_ai) + coach
     meals = meals_card(store, menu, menu_error, csrf)
     tiles = []
     hb = store.heart_by_day(7)

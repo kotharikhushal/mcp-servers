@@ -17,6 +17,7 @@ import logging
 import os
 import secrets
 import time
+from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Mapping
 from urllib.parse import urlencode, urlparse
 
@@ -28,13 +29,14 @@ from starlette.routing import Route
 
 from pathlib import Path
 
-from . import apple, mealie as mealie_mod, pages, reminders, views
+from . import analysis, apple, mealie as mealie_mod, pages, reminders, views
 from .auth import OIDCVerifier
 from .store import Store
 from .tools import _parse_when
 
 log = logging.getLogger("health-mcp.web")
 MAX_UPLOAD = 25 * 1024 * 1024
+AI_MIN_GAP_MIN = 60  # one local-model analysis per person per hour
 SESSION_COOKIE = "wellness_session"
 LOGIN_COOKIE = "wellness_login"
 SESSION_SECONDS = 7 * 86400
@@ -129,6 +131,8 @@ class Stores:
 def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
                verifier: OIDCVerifier, http: httpx.AsyncClient | None = None,
                notify: reminders.Notifier | None = None, mealie: Any = None) -> Starlette:
+    ollama_url = (env.get("OLLAMA_URL") or "").strip()
+    ollama_model = (env.get("OLLAMA_MODEL") or "gemma4:12b").strip()
     public = (env.get("WEB_PUBLIC_URL") or "").rstrip("/")
     p = urlparse(public)
     if p.scheme != "https" or not p.netloc:
@@ -219,7 +223,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
                 menu = await asyncio.to_thread(load_menu, store, s["u"])
             except mealie_mod.MealieError:
                 err = True
-        return page("Today", views.today_page(store, users[s["u"]], menu, err, s["csrf"]), s, "/", request)
+        return page("Today", views.today_page(store, users[s["u"]], menu, err, s["csrf"], bool(ollama_url)), s, "/", request)
 
     async def meals_eat(request: Request, s: dict[str, Any], store: Store) -> Response:
         if mealie is None:
@@ -264,6 +268,28 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             return back(str(e), True, "/")
         menu_cache.clear()
         return back(f'Swapped to {res["recipe"]}', False, "/")
+
+    async def analysis_refresh(request: Request, s: dict[str, Any], store: Store) -> Response:
+        if not ollama_url:
+            return back("The local model is not set up", True, "/")
+        now = store.now()
+        last = store.get_setting("ai_analysis_try")
+        try:
+            wait_until = datetime.fromisoformat(last) + timedelta(minutes=AI_MIN_GAP_MIN) if last else None
+        except ValueError:
+            wait_until = None
+        if wait_until and now < wait_until:
+            return back(f"Refreshed recently. Try again after {store.local(wait_until).strftime('%H:%M')}", True, "/")
+        store.set_setting("ai_analysis_try", now.isoformat())   # set first, so a double tap cannot start two runs
+        facts = analysis.build_facts(store)
+        try:
+            async with httpx.AsyncClient(timeout=180) as c:
+                res = await analysis.generate(c, ollama_url, ollama_model, facts)
+        except analysis.AnalysisError as e:
+            log.warning("analysis refresh failed for %s: %s", s["u"], e)
+            return back(str(e), True, "/")
+        store.set_setting("ai_analysis", json.dumps({**res, "at": store.now().isoformat(), "source": ollama_model}))
+        return back("Analysis refreshed", False, "/")
 
     async def meals_skip(request: Request, s: dict[str, Any], store: Store) -> Response:
         f = request.state.form
@@ -573,6 +599,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         Route("/meals/eat", authed(meals_eat, post=True), methods=["POST"]),
         Route("/meals/swap", authed(swap_get)), Route("/meals/swap", authed(swap_post, post=True), methods=["POST"]),
         Route("/meals/skip", authed(meals_skip, post=True), methods=["POST"]),
+        Route("/analysis/refresh", authed(analysis_refresh, post=True), methods=["POST"]),
         Route("/settings/appearance", authed(appearance_post, post=True), methods=["POST"]),
         Route("/settings/goal-weight", authed(goal_weight, post=True), methods=["POST"]),
         Route("/logout", authed(logout, post=True), methods=["POST"]),
