@@ -773,7 +773,8 @@ def test_chat_action_checks():
     assert a["summary"] == "Save blood pressure 128/84, now"
     for bad, text in [({"kind": "log_bp", "systolic": 84, "diastolic": 128}, "bp 84 128"),
                       ({"kind": "log_weight", "kg": 9}, "weight 9"),
-                      ({"kind": "log_meal", "name": "x", "kcal": 300}, "I ate x"),
+                      ({"kind": "log_meal", "name": "x", "kcal": 5}, "I ate x"),
+                      ({"kind": "log_meal", "name": "x", "kcal": 9000}, "I ate x"),
                       ({"kind": "delete_everything"}, "hi"), ({"kind": "add_shopping", "items": []}, "add")]:
         with pytest.raises(ValueError):
             chat.check_action(bad, text)
@@ -831,3 +832,28 @@ def test_chat_only_demands_the_gp_when_the_reply_talks_about_readings():
     assert "blood pressure without the GP" in chat.reply_problems("Your blood pressure trend is improving.", f, "bp?", None)
     assert "blood pressure without the GP" in chat.reply_problems("Your last sitting was 120/93.", f, "bp?", None)
     assert chat.reply_problems("Your last sitting was 120/93. Discuss it with your GP.", f, "120/93", None) == []
+
+
+def test_chat_estimated_meal_is_editable_marked_and_reuses_your_earlier_entry(tmp_path, monkeypatch):
+    import json
+    from app import chat
+    ans = chat_answer("That is about 290 kcal, an estimate. Edit it if you like, then press Confirm.",
+                      kind="log_meal", name="2 bananas and tea with milk", kcal=290, estimate=True)
+    c, stores, calls = ai_env(tmp_path, monkeypatch, [ans])
+    k = stores.get("khushal")
+    a = chat.check_action(ans["action"], "I ate 2 bananas and tea with 200 ml milk")
+    assert a["estimate"] and a["name"].endswith("(estimate)") and a["kcal"] == 290
+    c.post("/chat/send", data={"csrf": "tok", "text": "I ate 2 bananas and tea with 200 ml milk"})
+    page = c.get("/chat").text
+    assert 'name="kcal"' in page and 'value="290"' in page and "estimate" in page and not k.food_entries(1)
+    pid = json.loads(k.get_setting("chat_pending"))["id"]
+    bad = c.post("/chat/confirm", data={"csrf": "tok", "id": pid, "kcal": "abc"})
+    assert "err=" in bad.headers["location"] and not k.food_entries(1) and k.get_setting("chat_pending")
+    ok = c.post("/chat/confirm", data={"csrf": "tok", "id": pid, "kcal": "275"})
+    assert "ok=" in ok.headers["location"]
+    e = k.food_entries(1)[-1]
+    assert e["kcal"] == 275 and e["name"] == "2 bananas and tea with milk (estimate)"
+    again = chat.reuse_history(k, chat.check_action(ans["action"], "same again"))
+    assert again["kcal"] == 275 and again["from_history"] and "before" in again["summary"]
+    typed = chat.check_action({"kind": "log_meal", "name": "Toast", "kcal": 180}, "toast 180 kcal")
+    assert typed["estimate"] is False and typed["name"] == "Toast"

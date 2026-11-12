@@ -166,6 +166,7 @@ details.confirm .ask{font-size:13px;color:var(--ink2);text-align:right}
 .chat .msg.sys{justify-self:center;color:var(--muted);font-size:13px;background:none;padding:2px 6px}
 .chat .when{font-size:11px;color:var(--muted);margin-top:2px}
 .card.pend{border:2px solid var(--accent)}.card.pend .acts{display:flex;gap:8px;margin-top:10px;align-items:center}.card.pend button{margin:0}.card.pend form{margin:0}
+.card.pend .kc{display:flex;align-items:center;gap:8px;font-weight:650;margin:8px 0 2px}.card.pend .kc input{width:110px}
 .chatbox{position:sticky;bottom:calc(92px + env(safe-area-inset-bottom));display:flex;gap:8px;align-items:flex-end}.chatbox input{flex:1}
 
 /* refresh: Google Health tonal cards and soft sky, Lifesum friendliness, Cronometer bars */

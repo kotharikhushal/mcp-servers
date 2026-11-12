@@ -162,4 +162,5 @@ must be one you typed), and it waits as a **Confirm / Cancel** card for 30 minut
 Confirm. There is no delete or meal-plan editing in chat. Replies get the same checks as the analysis (no invented
 numbers, no diagnosis or medication wording, blood pressure only with the GP). The last 20 messages are kept per person
 and can be cleared; they are only sent back to the model as context, and the model is never trained by them.
+If you give no calories for a meal, the model proposes an estimate: the confirm card shows the kcal in an editable box, the name is saved with "(estimate)", and a meal you logged before is filled in from your own earlier entry instead of a guess.
 Meal planning stays with Claude through the connector.

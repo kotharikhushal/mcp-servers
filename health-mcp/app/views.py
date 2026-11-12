@@ -221,7 +221,9 @@ def chat_page(store: Store, csrf: str, history: list[dict[str, Any]], pending: d
     if pending:
         pend = (f'<div class="card pend"><h2>Confirm to save</h2><p>{esc(pending["summary"])}</p><div class="acts">'
                 f'<form method="post" action="/chat/confirm">{tok}<input type="hidden" name="id" value="{esc(pending["id"])}">'
-                f'<button class="go">Confirm</button></form>'
+                + (f'<label class="kc">Calories<input type="number" name="kcal" inputmode="numeric" min="0" max="5000" required '
+                   f'value="{esc(pending["kcal"])}"></label>' if pending.get("estimate") else "")
+                + '<button class="go">Confirm</button></form>'
                 f'<form method="post" action="/chat/cancel">{tok}<input type="hidden" name="id" value="{esc(pending["id"])}">'
                 f'<button class="ghost">Cancel</button></form></div></div>')
     clear = (f'<form method="post" action="/chat/clear" style="margin-top:14px">{tok}'
