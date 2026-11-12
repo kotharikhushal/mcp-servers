@@ -183,7 +183,7 @@ def test_all_new_tools_exist_and_health_settings_tools_work(tmp_path, monkeypatc
             "clear_checked_shopping_items", "create_recipe", "update_recipe", "import_recipe_from_url", "set_recipe_tags",
             "find_duplicate_recipes", "find_recipes_by_nutrition", "get_plan_nutrition", "move_meal_plan_entry",
             "clear_meal_plan", "log_planned_meal", "recipes_without_ingredients", "delete_recipes",
-            "get_settings", "set_goals", "set_fasting_days", "set_gp_note"} <= tool_names(mcp)
+            "get_settings", "set_goals", "set_fasting_days", "set_gp_note", "set_ai_analysis"} <= tool_names(mcp)
     assert call(mcp, "recipes_without_ingredients")["recipes"] == [{"slug": "empty", "name": "Empty"}]
     out = call(mcp, "delete_recipes", slugs=["empty", "dal"])["results"]
     assert out[0]["deleted"] and "has ingredients" in out[1]["error"]

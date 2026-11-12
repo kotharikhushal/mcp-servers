@@ -133,7 +133,7 @@ More Mealie tools, so common chores need no manual work in the Mealie app:
 - Meal plan: `get_plan_nutrition` (calories, protein and salt per meal and per day, fasting days marked), `move_meal_plan_entry`, `clear_meal_plan`, `log_planned_meal` (log a planned meal as eaten).
 Writes that Mealie could silently ignore are read back and reported if they did not save.
 
-Health settings tools (always on; `set_goals` also sets the optional daily calorie, protein and salt targets the app shows as "left today"): `get_settings`, `set_goals` (including goal weight), `set_fasting_days`, `set_fasting_weekdays`, `set_gp_note`.
+Health settings tools (always on; `set_goals` also sets the optional daily calorie, protein and salt targets the app shows as "left today"): `get_settings`, `set_goals` (including goal weight), `set_fasting_days`, `set_fasting_weekdays`, `set_gp_note`, `set_ai_analysis` (saves the analysis card shown at the top of the Today page; written by Claude on request, per person).
 
 When `MEALIE_URL` and `MEALIE_API_TOKEN` are set, the wellness app's home screen shows today's Mealie meal plan with one-tap "I ate this" (logs the recipe's own nutrition) and Skip.
 
