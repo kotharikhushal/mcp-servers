@@ -215,8 +215,8 @@ def chat_page(store: Store, csrf: str, history: list[dict[str, Any]], pending: d
     if not enabled:
         return ('<div class="card"><h2>Chat</h2><p class="m">Chat needs the local model. Set OLLAMA_URL on the '
                 'wellness container, then restart it.</p></div>')
-    msgs = "".join(f'<div class="msg {esc(m["r"])}">{esc(m["t"])}</div>' for m in history) or \
-        '<div class="msg note">Ask about your numbers, or say things like "log my weight 78.4" or "add milk and eggs to the shopping list".</div>'
+    msgs = "".join(f'<div class="msg {"sys" if m["r"] == "note" else esc(m["r"])}">{esc(m["t"])}</div>' for m in history) or \
+        '<div class="msg sys">Ask about your numbers, or say things like "log my weight 78.4" or "add milk and eggs to the shopping list".</div>'
     pend = ""
     if pending:
         pend = (f'<div class="card pend"><h2>Confirm to save</h2><p>{esc(pending["summary"])}</p><div class="acts">'
