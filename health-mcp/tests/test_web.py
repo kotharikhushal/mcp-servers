@@ -607,3 +607,92 @@ def test_bp_coach_note_names_the_number_that_is_high_and_uses_the_sitting_averag
     assert "last reading was 150/80" in sysh and "top number is above the 135" in sysh
     both = bp_over_text({"systolic": 150, "diastolic": 95, "readings": [1]})
     assert "Both numbers" in both
+
+
+# ---------------------------------------------------------------- local-model analysis
+GOOD_ANSWER = {"headline": "Blood pressure sittings are being logged; keep going",
+               "points": ["Data is limited so far, with only a few days of readings.",
+                          "Your latest sitting averaged {avg}: {summary}. Discuss these numbers with your GP.",
+                          "Try logging a weigh-in and your meals so the picture fills in."]}
+
+
+def ai_env(tmp_path, monkeypatch, answers):
+    """App with OLLAMA_URL set and a fake Ollama that returns the given answers in turn."""
+    calls = []
+    real = httpx.AsyncClient
+
+    def fake(request):
+        calls.append(request)
+        a = answers[min(len(calls) - 1, len(answers) - 1)]
+        return httpx.Response(200, json={"message": {"content": a if isinstance(a, str) else __import__("json").dumps(a)}})
+
+    monkeypatch.setattr(web.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(fake), **kw))
+    stores = web.Stores(str(tmp_path), "khushal", "Europe/London")
+    app = web.create_app(dict(ENV, OLLAMA_URL="http://ollama.test:9068", OLLAMA_MODEL="gemma4:12b"), stores, USERS, FakeVerifier(),
+                         http=real(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))))
+    return signed_in(TestClient(app, base_url=BASE, follow_redirects=False)), stores, calls
+
+
+def test_refresh_button_runs_the_local_model_checks_the_answer_and_saves_it(tmp_path, monkeypatch):
+    import json
+    from app import analysis
+    summary = "Latest sitting averaged 128/104: top number 128 is 7 under 135; bottom number 104 is 19 over 85."
+    good = {"headline": GOOD_ANSWER["headline"],
+            "points": [GOOD_ANSWER["points"][0], f"{summary} Discuss these numbers with your GP.", GOOD_ANSWER["points"][2]]}
+    c, stores, calls = ai_env(tmp_path, monkeypatch, [good])
+    k = stores.get("khushal")
+    k.log_blood_pressure(128, 104, 70, None, None)
+    assert analysis.build_facts(k)["blood_pressure"]["latest_sitting_summary"] == summary
+    home = c.get("/").text
+    assert "Refresh analysis" in home and "No analysis yet" in home
+    r = c.post("/analysis/refresh", data={"csrf": "tok"})
+    assert "ok=" in r.headers["location"] and len(calls) == 1
+    body = json.loads(calls[0].content)
+    assert body["model"] == "gemma4:12b" and "latest_sitting_summary" in body["messages"][1]["content"]
+    page = c.get("/").text
+    assert "Blood pressure sittings are being logged" in page and "gemma4:12b" in page and "Not a diagnosis" in page
+    again = c.post("/analysis/refresh", data={"csrf": "tok"})            # inside the hour: refused, model not called
+    assert "err=" in again.headers["location"] and len(calls) == 1
+    assert c.post("/analysis/refresh", data={}).status_code in (400, 403)   # no CSRF token
+
+
+def test_a_wrong_or_alarming_answer_is_rejected_and_the_old_analysis_is_kept(tmp_path, monkeypatch):
+    bad = {"headline": "Your blood pressure is high and needs attention",
+           "points": ["Latest reading 128/104 is below the home threshold of 135/85. See your GP.",
+                      "You have hypertension.", "Aim for 9,500 steps."]}
+    c, stores, calls = ai_env(tmp_path, monkeypatch, [bad])
+    k = stores.get("khushal")
+    k.log_blood_pressure(128, 104, 70, None, None)
+    k.set_setting("ai_analysis", '{"headline": "Earlier note", "points": ["kept"], "at": "%s", "source": "Claude"}' % k.now().isoformat())
+    r = c.post("/analysis/refresh", data={"csrf": "tok"})
+    assert "err=" in r.headers["location"] and len(calls) == 2           # one retry, then give up
+    assert "Earlier note" in c.get("/").text
+
+
+def test_no_refresh_button_when_no_local_model_is_set_up(env):
+    c, stores, _ = env
+    signed_in(c)
+    stores.get("khushal").set_setting("ai_analysis", '{"headline": "H", "points": ["p"], "at": "%s"}' % stores.get("khushal").now().isoformat())
+    page = c.get("/").text
+    assert "Ask Claude to refresh it" in page and "Refresh analysis" not in page
+    assert "err=" in c.post("/analysis/refresh", data={"csrf": "tok"}).headers["location"]
+
+
+def test_the_checks_catch_each_kind_of_bad_answer():
+    from app.analysis import problems
+    f = {"goals": {"steps": 10000}, "steps": {"daily_average": 7909},
+         "blood_pressure": {"latest_sitting_summary": "Latest sitting averaged 120/93: top number 120 is 15 under 135; bottom number 93 is 8 over 85.",
+                            "latest_sitting_mixed": True, "home_threshold": "135/85"}, "thin": False}
+    ok = {"headline": "Steps are up", "points": ["Steps averaged 7909 a day.", "Latest sitting averaged 120/93: top number 120 is 15 under 135; bottom number 93 is 8 over 85. Discuss with your GP.", "Keep going."]}
+    import json
+    assert problems(json.dumps(ok), f) == []
+    def bad(**kw):
+        d = json.loads(json.dumps(ok)); d.update(kw); return json.dumps(d)
+    assert "not valid JSON" in problems("nope", f)[0]
+    assert any("not in the facts" in p for p in problems(bad(points=["Aim for 8,000 steps.", "GP", "x"]), f))
+    assert "diagnosis or medication wording" in problems(bad(headline="You may have hypertension"), f)
+    assert "compares a mixed reading to the threshold as a whole" in problems(bad(points=["Your 120/93 is below the 135/85 threshold. GP.", "a", "b"]), f)
+    assert "alarming blood-pressure wording" in problems(bad(points=["Your blood pressure readings are high. GP.", "a", "b"]), f)
+    assert "blood pressure without the GP" in problems(bad(points=["Your blood pressure is changing.", "a", "b"]), f)
+    thin = dict(f, thin=True)
+    assert "does not say the data is thin" in problems(json.dumps(ok), thin)

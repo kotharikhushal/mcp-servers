@@ -140,3 +140,15 @@ When `MEALIE_URL` and `MEALIE_API_TOKEN` are set, the wellness app's home screen
 ## Development
     pip install -r requirements.txt -r requirements-dev.txt
     pytest tests && python tests/e2e.py
+
+
+## AI analysis from a local model (optional)
+
+Set `OLLAMA_URL` (for example `http://192.168.0.202:9068`) and, if you like, `OLLAMA_MODEL` (default `gemma4:12b`)
+and the Today page shows a **Refresh analysis** button. The app works out every figure and the blood-pressure
+comparison itself, asks the model only to write the wording, and checks the answer before saving it: valid
+shape, no number that is not in the facts, no diagnosis or medication wording, no wrong or alarming
+blood-pressure wording, and thin data admitted as thin. A failed answer is retried once, then dropped and the
+earlier analysis is kept. One refresh per person per hour. Ollama is called from the server, so it only needs to be
+reachable from the app container (do not expose Ollama to the internet: it has no login). Without `OLLAMA_URL`
+the analysis is written by Claude when asked ("refresh wellness") through `set_ai_analysis`.
