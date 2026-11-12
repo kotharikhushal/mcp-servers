@@ -90,9 +90,13 @@ def materialise(payload: dict) -> dict:
     """Replace NOW-Nh markers with real timestamps so data lands in 'today'."""
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     text = json.dumps(payload)
     for h in range(1, 12):
-        text = text.replace(f'"NOW-{h}h"', json.dumps((now - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")))
+        # Stay inside today however early the suite runs: before 11:00 UTC "now minus 11h" is
+        # yesterday. Clamp to just after midnight, keeping bigger h earlier so start < end holds.
+        ts = max(now - timedelta(hours=h), day_start + timedelta(seconds=12 - h))
+        text = text.replace(f'"NOW-{h}h"', json.dumps(ts.strftime("%Y-%m-%dT%H:%M:%SZ")))
     return json.loads(text)
 
 
