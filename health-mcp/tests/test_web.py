@@ -873,7 +873,7 @@ def test_chat_facts_hold_the_calories_left_so_the_model_need_not_calculate(tmp_p
     assert any("not in the facts" in p for p in chat.reply_problems("You have 1001 kcal left.", f, "x", None))
     st.set_fasting(st.local(st.now()).date(), True)
     g = chat.chat_facts(st, None)
-    assert "today_is_fasting_day" in g and "kcal_left_today" not in g
+    assert "today_is_fasting_day" in g and g["kcal_left_today"] == 1200
 
 def test_chat_allows_food_arithmetic_but_not_for_blood_pressure(tmp_path):
     from app import chat

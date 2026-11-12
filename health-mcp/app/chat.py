@@ -32,7 +32,7 @@ Rules:
 - Answer only from the facts and the conversation. Never calculate new numbers and never invent any. If the facts do not hold the answer, say so.
 - Keep replies short, kind and practical, in British English and plain words, no emojis.
 - For blood pressure, quote "latest_sitting_summary" and compare top and bottom separately as it states. Never call readings "high" or say they "need attention". Say the GP follow-up is the place to discuss them.
-- For "should I eat more" or "what is left today", use "kcal_left_today", "protein_left_today_g", "today_is_fasting_day" and "meal_plan_today" exactly as given. If "today_is_fasting_day" is present, remind them of its rule instead of suggesting extra food. If there is no calorie goal in the facts, say you cannot tell without one. "kcal_left_after_planned_meals" says what would remain after the planned meals not yet eaten. For food you may add or subtract the calorie and protein figures in the facts (or a snack the person names); round to the nearest 10 and say it is approximate. Never do arithmetic on blood pressure, weight or steps.
+- For "should I eat more" or "what is left today", use "kcal_left_today", "protein_left_today_g", "today_is_fasting_day" and "meal_plan_today" exactly as given. Always answer the number they asked for first. If "today_is_fasting_day" is present, then add its rule and say the calories left are a ceiling for the day and not a reason to eat more, because the rule limits them to the one evening meal plus hot drinks, fruit and dry fruit. If there is no calorie goal in the facts, say you cannot tell without one. "kcal_left_after_planned_meals" says what would remain after the planned meals not yet eaten. For food you may add or subtract the calorie and protein figures in the facts (or a snack the person names); round to the nearest 10 and say it is approximate. Never do arithmetic on blood pressure, weight or steps.
 - Never diagnose, never name a medical condition, never comment on medication or doses. Do not set new health targets.
 - To save something, propose ONE action and say in the reply what you will save and that they must press Confirm. Only propose an action when the person clearly asks to log or add something, and only with numbers they typed. Never claim it is saved yet.
 - If asked what you can do, say briefly: answer questions about their numbers, today's food and plan, and, after they press Confirm, log weight, blood pressure, a meal with kcal, a recipe from their recipe book, or shopping items. Meal planning is done by asking Claude.
@@ -114,7 +114,7 @@ def chat_facts(store: Store, menu: list[dict[str, Any]] | None) -> dict[str, Any
     if fasting:
         f["today_is_fasting_day"] = ("Yes: one cooked vegetarian evening meal around 5:30 to 6:00 pm, no onion or garlic. "
                                      "Hot drinks, fruit and dry fruit are fine in between.")
-    elif kcal_goal:
+    if kcal_goal:
         f["kcal_left_today"] = max(0, round(kcal_goal - total))
     if menu:
         skipped = {x for x in (store.get_setting(f"skip:{today.isoformat()}") or "").split(",") if x}
@@ -126,10 +126,10 @@ def chat_facts(store: Store, menu: list[dict[str, Any]] | None) -> dict[str, Any
             if kc and str(m.get("id")) not in skipped and not any(n.startswith(f"{rn} x") for n in names):
                 left += kc
         f["planned_meals_not_yet_eaten_kcal"] = round(left)
-        if not fasting and kcal_goal:
+        if kcal_goal:
             f["kcal_left_after_planned_meals"] = round(kcal_goal - total - left)
     prot_goal = f["goals"].get("protein_g")
-    if prot_goal and not fasting:
+    if prot_goal:
         f["protein_left_today_g"] = max(0, round(prot_goal - sum(e["protein_g"] or 0 for e in eaten)))
     if menu is not None:
         f["meal_plan_today"] = [{"meal": m.get("meal"), "recipe": m.get("recipe_name") or m.get("recipe"),
