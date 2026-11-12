@@ -204,6 +204,9 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
                                          back=back, tint=tint, mode=stores.get(s["u"]).get_setting("mode") or "auto",
                                          palette=stores.get(s["u"]).get_setting("palette") or "tide", chat=bool(ollama_url)))
 
+    def mealie_for(user: str) -> Any:
+        return mealie.get(user) if isinstance(mealie, dict) else mealie
+
     menu_cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 
     def load_menu(store: Store, user: str) -> list[dict[str, Any]]:
@@ -212,13 +215,13 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         hit = menu_cache.get((user, day.isoformat()))
         if hit and time.monotonic() - hit[0] < 30:
             return hit[1]
-        menu = mealie.day_menu(day)
+        menu = mealie_for(user).day_menu(day)
         menu_cache[(user, day.isoformat())] = (time.monotonic(), menu)
         return menu
 
     async def today(request: Request, s: dict[str, Any], store: Store) -> Response:
         menu, err = None, False
-        if mealie is not None:
+        if mealie_for(s["u"]) is not None:
             try:
                 menu = await asyncio.to_thread(load_menu, store, s["u"])
             except mealie_mod.MealieError:
@@ -226,7 +229,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         return page("Today", views.today_page(store, users[s["u"]], menu, err, s["csrf"], bool(ollama_url)), s, "/", request)
 
     async def meals_eat(request: Request, s: dict[str, Any], store: Store) -> Response:
-        if mealie is None:
+        if mealie_for(s["u"]) is None:
             return back("Meal plan is not connected", True, "/")
         eid = str(request.state.form.get("entry_id", ""))
         try:
@@ -249,21 +252,22 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         eid = request.query_params.get("entry_id", "")
         q = request.query_params.get("q", "")[:60]
         try:
-            menu = await asyncio.to_thread(load_menu, store, s["u"]) if mealie is not None else []
+            menu = await asyncio.to_thread(load_menu, store, s["u"]) if mealie_for(s["u"]) is not None else []
             m = next((x for x in menu if str(x["id"]) == eid), None)
             if not m:
                 return back("That meal is no longer in today's plan", True, "/")
-            opts = await asyncio.to_thread(mealie.swap_options, (m.get("per_serving") or {}).get("kcal"), q, m.get("slug"))
+            opts = await asyncio.to_thread(mealie_for(s["u"]).swap_options, (m.get("per_serving") or {}).get("kcal"), q, m.get("slug"))
         except mealie_mod.MealieError as e:
             return back(str(e), True, "/")
         return page("Swap meal", views.swap_page(store, s["csrf"], m, opts, q), s, "/", request, back=("/", "Today"), tint="--c-food")
 
     async def swap_post(request: Request, s: dict[str, Any], store: Store) -> Response:
         f = request.state.form
-        if mealie is None:
+        mc = mealie_for(s["u"])
+        if mc is None:
             return back("Meal plan is not connected", True, "/")
         try:
-            res = await asyncio.to_thread(mealie.swap_plan_entry, str(f.get("entry_id", "")), str(f.get("slug", "")))
+            res = await asyncio.to_thread(mc.swap_plan_entry, str(f.get("entry_id", "")), str(f.get("slug", "")))
         except mealie_mod.MealieError as e:
             return back(str(e), True, "/")
         menu_cache.clear()
@@ -305,7 +309,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             return back("Confirm or cancel the saved suggestion first", True, "/chat")
         history = chat_mod.load_history(store)
         menu = None
-        if mealie is not None:
+        if mealie_for(s["u"]) is not None:
             try:
                 menu = await asyncio.to_thread(load_menu, store, s["u"])
             except mealie_mod.MealieError:
@@ -316,7 +320,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
                 reply, action = await chat_mod.respond(c, ollama_url, ollama_model, facts, history, text)
             if action:
                 action = chat_mod.reuse_history(store, action)
-                action = await asyncio.to_thread(chat_mod.resolve, mealie, action)
+                action = await asyncio.to_thread(chat_mod.resolve, mealie_for(s["u"]), action)
         except (chat_mod.ChatError, mealie_mod.MealieError) as e:
             log.warning("chat failed for %s: %s", s["u"], e)
             return back(str(e)[:150], True, "/chat")
@@ -340,7 +344,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             p = {**p, "kcal": round(kcal)}
         chat_mod.clear_pending(store)       # cleared first, so a double tap cannot save twice
         try:
-            msg = await asyncio.to_thread(chat_mod.execute, store, mealie, p)
+            msg = await asyncio.to_thread(chat_mod.execute, store, mealie_for(s["u"]), p)
         except (mealie_mod.MealieError, ValueError) as e:
             chat_mod.add_message(store, "note", f"Not saved: {e}"[:300])
             return back(str(e)[:150], True, "/chat")
@@ -695,9 +699,11 @@ def build(env: Mapping[str, str], primary: Store | None = None, stores: Stores |
     verifier = OIDCVerifier(issuer, client_id, client_id=client_id,
                             client_secret=env.get("WEB_OIDC_CLIENT_SECRET") or None)
     stores = stores or Stores(env.get("DATA_DIR", "/data"), default, env.get("TZ_NAME", "Europe/London"), primary)
-    mealie_url, mealie_token = (env.get("MEALIE_URL") or "").strip(), (env.get("MEALIE_API_TOKEN") or "").strip()
-    client = mealie_mod.Mealie(mealie_url, mealie_token) if mealie_url and mealie_token else None
-    app = create_app(env, stores, users, verifier, mealie=client)
+    try:
+        clients = mealie_mod.clients_from_env(env, users, default)
+    except ValueError as e:
+        raise WebConfigError(str(e)) from e
+    app = create_app(env, stores, users, verifier, mealie=clients or None)
     app.state.stores, app.state.users = stores, users
     app.state.ntfy_base = (env.get("NTFY_BASE") or "https://ntfy.sh").rstrip("/")
     return app

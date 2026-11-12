@@ -104,6 +104,12 @@ class PersonStore:
         return getattr(self._stores.get(self._person()), name)
 
 
+def _web_default(env: Mapping[str, str]) -> str:
+    from . import web
+    users = web.parse_users(env.get("WEB_USERS") or "default:Default")
+    return (env.get("WEB_DEFAULT_USER") or next(iter(users))).strip().lower()
+
+
 def create(env: Mapping[str, str] = os.environ) -> tuple[FastMCP, Store, OIDCVerifier]:
     public_url = _req(env, "PUBLIC_URL").rstrip("/")
     ingest_token = _req(env, "INGEST_TOKEN")
@@ -154,13 +160,16 @@ def create(env: Mapping[str, str] = os.environ) -> tuple[FastMCP, Store, OIDCVer
     known = set(_web.parse_users(env.get("WEB_USERS") or "default:Default"))
     person_store = PersonStore(stores, links, known)
     tools.register(PersonalTools(mcp), person_store)  # type: ignore[arg-type]
-    mealie_url, mealie_token = (env.get("MEALIE_URL") or "").strip(), (env.get("MEALIE_API_TOKEN") or "").strip()
-    if mealie_url or mealie_token:
-        if not (mealie_url and mealie_token) or urlparse(mealie_url).scheme not in ("http", "https") \
-                or not urlparse(mealie_url).netloc:
-            raise ConfigError("MEALIE_URL (http or https address) and MEALIE_API_TOKEN must both be set")
-        mealie.register(mcp, person_store, mealie.Mealie(mealie_url, mealie_token), tools._parse_when, tools.READ, tools.WRITE, tools.DELETE,
-                       personal)
+    mealie_url = (env.get("MEALIE_URL") or "").strip()
+    if mealie_url or env.get("MEALIE_API_TOKEN") or any(k.startswith("MEALIE_TOKEN_") for k in env):
+        if urlparse(mealie_url).scheme not in ("http", "https") or not urlparse(mealie_url).netloc:
+            raise ConfigError("MEALIE_URL must be an http or https address")
+        try:
+            clients = mealie.clients_from_env(env, known, _web_default(env))
+        except ValueError as e:
+            raise ConfigError(str(e)) from e
+        mealie.register(PersonalTools(mcp), person_store, mealie.ByPerson(clients, person_store._person),  # type: ignore[arg-type]
+                        tools._parse_when, tools.READ, tools.WRITE, tools.DELETE, personal)
 
     # A token in the URL ends up in proxy and access logs, so this is off unless asked for.
     allow_query_key = (env.get("ALLOW_QUERY_KEY") or "").lower() in ("1", "true", "yes")

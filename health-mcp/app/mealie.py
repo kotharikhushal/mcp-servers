@@ -550,6 +550,42 @@ class Mealie:
         return {"id": e.get("id"), "date": e.get("date"), "meal": e.get("entryType")}
 
 
+def clients_from_env(env: Any, users: Any, default: str) -> dict[str, "Mealie"]:
+    """One Mealie client per person. MEALIE_API_TOKEN belongs to the default person; MEALIE_TOKEN_<NAME>
+    (for example MEALIE_TOKEN_BUNNY) sets or overrides one person's own token. Meal plans and shopping lists
+    live in the household of whoever owns the token, so each person needs a token from their own login."""
+    url = (env.get("MEALIE_URL") or "").strip()
+    tokens: dict[str, str] = {}
+    if (env.get("MEALIE_API_TOKEN") or "").strip():
+        tokens[default] = env["MEALIE_API_TOKEN"].strip()
+    for name in users:
+        t = (env.get(f"MEALIE_TOKEN_{str(name).upper()}") or "").strip()
+        if t:
+            tokens[name] = t
+    if not url:
+        if tokens:
+            raise ValueError("MEALIE_URL must be set when a Mealie token is")
+        return {}
+    if not tokens:
+        raise ValueError("MEALIE_URL is set but no Mealie token is (MEALIE_API_TOKEN or MEALIE_TOKEN_<NAME>)")
+    shared: dict[str, Mealie] = {}
+    return {n: shared.setdefault(t, Mealie(url, t)) for n, t in tokens.items()}
+
+
+class ByPerson:
+    """Stands in for a Mealie client in the connector tools: each call uses the token of whoever is asking."""
+
+    def __init__(self, clients: dict[str, Mealie], who: Any) -> None:
+        self._clients, self._who = clients, who
+
+    def __getattr__(self, name: str) -> Any:
+        person = self._who()
+        c = self._clients.get(person)
+        if c is None:
+            raise MealieError(f"Mealie is not set up for {person}. Ask the owner to add MEALIE_TOKEN_{str(person).upper()}.")
+        return getattr(c, name)
+
+
 def register(mcp: Any, store: Any, mealie: Mealie, parse_when: Any, read: Any, write: Any, delete: Any,
              personal: Any = lambda f: f) -> None:
     """Adds the Mealie tools. Errors become plain messages instead of stack traces."""

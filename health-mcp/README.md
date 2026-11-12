@@ -121,6 +121,8 @@ minute-by-minute heart rate for Apple data.
 
 ## Mealie (optional)
 Set `MEALIE_URL` and `MEALIE_API_TOKEN` in `.env` (token from Mealie, User profile, API tokens) and restart.
+
+**One Mealie account per person.** `MEALIE_API_TOKEN` belongs to the default person. Give anyone else their own with `MEALIE_TOKEN_<NAME>` (for example `MEALIE_TOKEN_BUNNY`), created while signed in to Mealie as them. Meal plans and shopping lists belong to the household of the token's owner, so people in different households each see their own plan, while recipes stay shared across the group. The connector tools and the web app both use the token of whoever is asking; a person with no token gets a clear message instead of someone else's plan. Replace the token in the environment file and recreate the container to change it.
 The Health connector then also offers `mealie_status`, `search_recipes`, `get_recipe` (with nutrition per
 serving), `get_meal_plan`, `add_to_meal_plan` and `log_recipe_as_meal` (scales the recipe's own nutrition by
 the servings eaten and writes it to the food log). The token is only sent to `MEALIE_URL` and is never
