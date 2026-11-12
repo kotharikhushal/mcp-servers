@@ -874,3 +874,20 @@ def test_chat_facts_hold_the_calories_left_so_the_model_need_not_calculate(tmp_p
     st.set_fasting(st.local(st.now()).date(), True)
     g = chat.chat_facts(st, None)
     assert "today_is_fasting_day" in g and "kcal_left_today" not in g
+
+def test_chat_allows_food_arithmetic_but_not_for_blood_pressure(tmp_path):
+    from app import chat
+    from app.store import Store
+    st = Store(str(tmp_path / "d.db"), tz="Europe/London")
+    st.set_setting("kcal_goal", "1500")
+    st.log_meal("Toast", 300, 8.0, None, None, None, None, None, None)
+    menu = [{"id": "p1", "meal": "dinner", "recipe_name": "Dal", "_rec": {"name": "Dal"}, "per_serving": {"kcal": 620}}]
+    f = chat.chat_facts(st, menu)
+    assert f["planned_meals_not_yet_eaten_kcal"] == 620 and f["kcal_left_after_planned_meals"] == 580
+    ok = lambda t, u="x": chat.reply_problems(t, f, u, None)
+    assert ok("After the dal you would have 580 kcal left.") == []
+    assert ok("A 250 kcal snack would leave you about 330.", "I might have a 250 kcal snack") == []   # 580 - 250
+    assert ok("You have 920 kcal planned and eaten.") == []                                           # 300 + 620
+    assert any("not in the facts" in p for p in ok("You have 777 kcal left."))
+    f["blood_pressure"] = {"latest_sitting_summary": "x", "latest_sitting_mixed": False}
+    assert any("not in the facts" in p for p in ok("Your blood pressure is 920 over the GP threshold."))

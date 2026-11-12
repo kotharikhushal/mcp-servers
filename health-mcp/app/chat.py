@@ -32,7 +32,7 @@ Rules:
 - Answer only from the facts and the conversation. Never calculate new numbers and never invent any. If the facts do not hold the answer, say so.
 - Keep replies short, kind and practical, in British English and plain words, no emojis.
 - For blood pressure, quote "latest_sitting_summary" and compare top and bottom separately as it states. Never call readings "high" or say they "need attention". Say the GP follow-up is the place to discuss them.
-- For "should I eat more" or "what is left today", use "kcal_left_today", "protein_left_today_g", "today_is_fasting_day" and "meal_plan_today" exactly as given. If "today_is_fasting_day" is present, remind them of its rule instead of suggesting extra food. If there is no calorie goal in the facts, say you cannot tell without one.
+- For "should I eat more" or "what is left today", use "kcal_left_today", "protein_left_today_g", "today_is_fasting_day" and "meal_plan_today" exactly as given. If "today_is_fasting_day" is present, remind them of its rule instead of suggesting extra food. If there is no calorie goal in the facts, say you cannot tell without one. "kcal_left_after_planned_meals" says what would remain after the planned meals not yet eaten. For food you may add or subtract the calorie and protein figures in the facts (or a snack the person names); round to the nearest 10 and say it is approximate. Never do arithmetic on blood pressure, weight or steps.
 - Never diagnose, never name a medical condition, never comment on medication or doses. Do not set new health targets.
 - To save something, propose ONE action and say in the reply what you will save and that they must press Confirm. Only propose an action when the person clearly asks to log or add something, and only with numbers they typed. Never claim it is saved yet.
 - If asked what you can do, say briefly: answer questions about their numbers, today's food and plan, and, after they press Confirm, log weight, blood pressure, a meal with kcal, a recipe from their recipe book, or shopping items. Meal planning is done by asking Claude.
@@ -116,6 +116,18 @@ def chat_facts(store: Store, menu: list[dict[str, Any]] | None) -> dict[str, Any
                                      "Hot drinks, fruit and dry fruit are fine in between.")
     elif kcal_goal:
         f["kcal_left_today"] = max(0, round(kcal_goal - total))
+    if menu:
+        skipped = {x for x in (store.get_setting(f"skip:{today.isoformat()}") or "").split(",") if x}
+        names = [e["name"] for e in eaten]
+        left = 0.0
+        for m in menu:
+            kc = (m.get("per_serving") or {}).get("kcal")
+            rn = (m.get("_rec") or {}).get("name") or m.get("recipe_name") or ""
+            if kc and str(m.get("id")) not in skipped and not any(n.startswith(f"{rn} x") for n in names):
+                left += kc
+        f["planned_meals_not_yet_eaten_kcal"] = round(left)
+        if not fasting and kcal_goal:
+            f["kcal_left_after_planned_meals"] = round(kcal_goal - total - left)
     prot_goal = f["goals"].get("protein_g")
     if prot_goal and not fasting:
         f["protein_left_today_g"] = max(0, round(prot_goal - sum(e["protein_g"] or 0 for e in eaten)))
@@ -215,6 +227,35 @@ def check_action(a: Any, user_text: str) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------- checking the reply
+def food_numbers(facts: dict[str, Any]) -> set[float]:
+    """Calorie and protein figures in the facts, for allowing simple sums and differences of them in a reply."""
+    out: set[float] = set()
+    for k in ("food_today_total_kcal", "kcal_left_today", "protein_left_today_g", "planned_meals_not_yet_eaten_kcal",
+              "kcal_left_after_planned_meals"):
+        if isinstance(facts.get(k), (int, float)):
+            out.add(float(facts[k]))
+    g = facts.get("goals") or {}
+    for k in ("kcal", "protein_g"):
+        if isinstance(g.get(k), (int, float)):
+            out.add(float(g[k]))
+    for e in facts.get("food_logged_today") or []:
+        for k in ("kcal", "protein_g"):
+            if isinstance(e.get(k), (int, float)):
+                out.add(float(e[k]))
+    for m in facts.get("meal_plan_today") or []:
+        if isinstance(m.get("kcal_per_serving"), (int, float)):
+            out.add(float(m["kcal_per_serving"]))
+    return out
+
+
+def derived_food_numbers(facts: dict[str, Any]) -> set[float]:
+    """Sums and differences of two figures, plus the total of everything, so a reply may do simple food arithmetic."""
+    base = sorted(food_numbers(facts))[:30]
+    out = {a + b for a in base for b in base} | {abs(a - b) for a in base for b in base}
+    out.add(sum(base))
+    return out
+
+
 def reply_problems(reply: Any, facts: dict[str, Any], user_text: str, action: dict[str, Any] | None) -> list[str]:
     if not isinstance(reply, str) or not reply.strip():
         return ["empty reply"]
@@ -223,6 +264,11 @@ def reply_problems(reply: Any, facts: dict[str, Any], user_text: str, action: di
     if len(text) > 600:
         errs.append("reply too long")
     allowed = analysis._numbers(facts, set()) | user_numbers(user_text)
+    # Food questions may use simple sums and differences of calorie and protein figures; blood pressure stays strict.
+    derived: set[float] = set()
+    if not re.search(r"blood pressure|\bBP\b|mmHg|systolic|diastolic|\d{2,3}/\d{2,3}", text, re.I):
+        derived = derived_food_numbers(facts) | {a + b for a in user_numbers(user_text) for b in food_numbers(facts)} \
+            | {abs(a - b) for a in user_numbers(user_text) for b in food_numbers(facts)}
     if action:
         allowed |= analysis._numbers({k: v for k, v in action.items() if k != "summary"}, set())
     clean = re.sub(r"\d{1,2}:\d{2}", " ", text)
@@ -234,6 +280,8 @@ def reply_problems(reply: Any, facts: dict[str, Any], user_text: str, action: di
         n = float(raw)
         dec = len(raw.split(".")[1]) if "." in raw else 0
         ok = any(round(a, dec) == n for a in allowed) or any(abs(a - n) <= 0.003 * a for a in allowed if a >= 1000)
+        if not ok and dec == 0 and n >= 50 and any(abs(d - n) <= 5 for d in derived):   # rounded to the nearest 10
+            ok = True
         if not ok and dec == 0 and n <= 7:
             ok = True
         if not ok:
