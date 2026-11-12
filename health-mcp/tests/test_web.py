@@ -811,3 +811,14 @@ def test_chat_mealie_actions_resolve_first_then_run_on_confirm(tmp_path):
         chat.resolve(m, chat.check_action({"kind": "log_recipe", "recipe": "pizza"}, "log pizza"))
     with pytest.raises(Exception):
         chat.resolve(None, s)
+
+
+def test_refreshed_today_page_has_summary_chips_actions_and_plain_bp_status(env):
+    c, stores, _ = env
+    signed_in(c)
+    k = stores.get("khushal")
+    k.log_blood_pressure(128, 104, 70, None, None)
+    page = c.get("/").text
+    assert 'class="card hero2"' in page and 'href="/sleep"' in page and 'href="/food"' in page
+    assert "Bottom number over" in page                       # top 128 is under 135, bottom 104 is over 85
+    assert 'href="/log"' in page and "Ask coach" not in page   # no local model, so no coach button

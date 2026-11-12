@@ -213,10 +213,10 @@ def chat_page(store: Store, csrf: str, history: list[dict[str, Any]], pending: d
               model: str = "") -> str:
     tok = f'<input type="hidden" name="csrf" value="{esc(csrf)}">'
     if not enabled:
-        return ('<div class="card"><h2>Chat</h2><p class="muted">Chat needs the local model. Set OLLAMA_URL on the '
+        return ('<div class="card"><h2>Chat</h2><p class="m">Chat needs the local model. Set OLLAMA_URL on the '
                 'wellness container, then restart it.</p></div>')
-    msgs = "".join(f'<div class="m {esc(m["r"])}">{esc(m["t"])}</div>' for m in history) or \
-        '<div class="m note">Ask about your numbers, or say things like "log my weight 78.4" or "add milk and eggs to the shopping list".</div>'
+    msgs = "".join(f'<div class="msg {esc(m["r"])}">{esc(m["t"])}</div>' for m in history) or \
+        '<div class="msg note">Ask about your numbers, or say things like "log my weight 78.4" or "add milk and eggs to the shopping list".</div>'
     pend = ""
     if pending:
         pend = (f'<div class="card pend"><h2>Confirm to save</h2><p>{esc(pending["summary"])}</p><div class="acts">'
@@ -230,7 +230,7 @@ def chat_page(store: Store, csrf: str, history: list[dict[str, Any]], pending: d
             f'<form method="post" action="/chat/send" class="chatbox">{tok}'
             f'<input name="text" maxlength="500" required autocomplete="off" placeholder="Ask or log something" aria-label="Message">'
             f'<button class="go">Send</button></form>'
-            f'<p class="muted" style="font-size:12px;margin-top:10px">Written by {esc(model or "the local model")}. Nothing is saved until you press Confirm. '
+            f'<p class="m" style="font-size:12px;margin-top:10px">Written by {esc(model or "the local model")}. Nothing is saved until you press Confirm. '
             f'Not medical advice.</p>{clear}')
 
 
@@ -256,9 +256,18 @@ def _ai_card(store: Store, csrf: str = "", can_refresh: bool = False) -> str:
     items = "".join(f"<li>{esc(x)}</li>" for x in pts)
     who = esc(str(a.get("source") or "Claude"))
     tail = "" if btn else " Ask Claude to refresh it."
-    return (f'<div class="card ai"><h2>AI analysis{stale}</h2><p class="aih">{esc(head)}</p>'
+    return (f'<div class="card ai"><div class="aihead">{icon("spark")}<span>AI analysis · {esc(lbl)}</span>{stale}</div>'
+            f'<p class="aih">{esc(head)}</p>'
             f'<ul class="aip">{items}</ul>'
             f'<p class="m">Written by {who} from your own data, {esc(lbl)}. Not a diagnosis.{tail}</p>{btn}</div>')
+
+
+def _bp_pill(b: dict[str, Any]) -> str:
+    """Plain status for the latest sitting; top and bottom are compared separately, never as one reading."""
+    ts, td = HOME_BP_HIGH
+    top, bot = b["systolic"] >= ts, b["diastolic"] >= td
+    return ("Under 135/85" if not (top or bot) else "Both numbers over" if top and bot
+            else "Top number over" if top else "Bottom number over")
 
 
 def today_page(store: Store, name: str, menu: list[dict[str, Any]] | None = None, menu_error: bool = False,
@@ -278,10 +287,6 @@ def today_page(store: Store, name: str, menu: list[dict[str, Any]] | None = None
     sleep_ring = charts.ring(_night(night) / goal_s if night else 0, "--c-sleep",
                              big=hm_short(_night(night)) if night else "–", small=f'of {g["sleep_goal"]:g} h',
                              summary=f"Sleep last night: {hm(_night(night)) if night else 'no data'}")
-    hero = ('<div class="card hero">'
-            f'<a href="/steps">{steps_ring}<div class="cap">Steps</div><div class="sub">today</div></a>'
-            f'<a href="/sleep">{sleep_ring}<div class="cap">Sleep</div><div class="sub">last night</div></a></div>')
-
     notes = "".join(f'<div class="note {lvl}">{esc(t)}</div>' for lvl, t in notes_for(store))
     coach = (f'<div class="card coach"><div class="face" aria-hidden="true">C</div><div class="notes">'
              f'<h2>Coach notes</h2>{notes}</div></div>')
@@ -305,7 +310,8 @@ def today_page(store: Store, name: str, menu: list[dict[str, Any]] | None = None
         n = len(b["readings"])
         tiles.append(tile("/bp", "Blood pressure", "bp", "--c-heart", f'{b["systolic"]}/{b["diastolic"]}', "mmHg",
                           (f"{n} readings, average · " if n > 1 else "") + _when(store, b["time"]),
-                          charts.spark([float(r["systolic"]) for r in bps], "--c-heart")))
+                          charts.spark([float(r["systolic"]) for r in bps], "--c-heart"),
+                          pill=_bp_pill(b)))
     else:
         tiles.append(tile("/bp", "Blood pressure", "bp", "--c-heart", "–", "", "Log a reading"))
 
@@ -340,15 +346,25 @@ def today_page(store: Store, name: str, menu: list[dict[str, Any]] | None = None
         k = date.fromisoformat(w["date"])
         if k in per_day:
             per_day[k] += w["minutes"]
-    tiles.append(tile("/activity", "Workouts", "work", "--c-work", str(len(wk)), "this week" if wk else "",
-                      f'{hm(mins * 60)} active · last: {wk[-1]["type"].capitalize()}' if wk else "No workouts in the last 7 days",
-                      charts.spark([float(v) if v else None for v in per_day.values()], "--c-work"), wide=True))
+    eaten = kcal_by[today]
+    food_b, food_s = (("Fasting", "day") if fasting and not today_food else
+                      ((f"{abs(kg - eaten):,.0f}", "kcal left" if kg >= eaten else "kcal over") if kg and today_food else
+                       ((f"{eaten:,}", "kcal today") if today_food else ("–", "nothing logged"))))
+    hero = ('<div class="card hero2">'
+            f'<a class="bigring" href="/steps">{steps_ring}<span>Steps today</span></a><div class="stack">'
+            f'<a class="chip" href="/sleep" style="--tc:var(--c-sleep)"><span class="l">Sleep</span>'
+            f'<b>{esc(hm_short(_night(night)) if night else "–")}</b><small>of {g["sleep_goal"]:g} h goal</small></a>'
+            f'<a class="chip" href="/food" style="--tc:var(--c-food)"><span class="l">Food</span><b>{esc(food_b)}</b><small>{esc(food_s)}</small></a>'
+            f'<a class="chip" href="/activity" style="--tc:var(--c-work)"><span class="l">Workouts</span>'
+            f'<b>{esc(hm(mins * 60) if mins else "–")}</b><small>this week</small></a></div></div>')
+    actions = (f'<div class="qa"><a class="qb pri" href="/log">{icon("plus")}Log</a>'
+               + (f'<a class="qb" href="/chat">{icon("spark")}Ask coach</a>' if can_refresh_ai else "") + '</div>')
 
     st = store.status()
     sync = (f'<p class="m" style="text-align:center">Watch data synced {esc(st["last_sync"])}</p>'
             if st.get("last_sync") else "")
     return (f'<div class="greet"><h1>{_greeting(now.hour)}, {esc(name)}</h1><p>{esc(now.strftime("%A %-d %B"))}</p></div>'
-            f'{hero}{coach}{meals}<div class="sect"><h2>Your numbers</h2></div><div class="tiles">{"".join(tiles)}</div>{sync}'
+            f'{hero}{actions}{coach}{meals}<div class="sect"><h2>Your numbers</h2></div><div class="tiles">{"".join(tiles)}</div>{sync}'
             '<p class="m" style="text-align:center">Notes are based on your own numbers. They are not a diagnosis.</p>')
 
 

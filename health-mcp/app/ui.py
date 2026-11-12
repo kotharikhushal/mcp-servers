@@ -85,7 +85,7 @@ h2{font-size:19px;letter-spacing:-.02em;font-weight:700;margin:0 0 10px}
 .flash{padding:13px 16px;border-radius:16px;background:var(--soft);border:1px solid var(--accent);font-weight:650;margin:6px 0 14px}
 .flash.err{background:var(--err-bg);color:var(--ink);border-color:var(--bad)}
 /* home */
-.greet{margin:10px 0 16px}.greet h1{margin:0;font-size:34px}.greet p{margin:4px 0 0;color:var(--ink2);font-weight:500}
+.greet{margin:10px 0 16px}.greet h1{margin:0;font-size:30px}.greet p{margin:4px 0 0;color:var(--ink2);font-weight:500}
 .hero{display:flex;justify-content:space-around;align-items:flex-start;gap:8px;padding:22px 10px 16px;border:0;
 background:radial-gradient(120% 90% at 50% 0%,color-mix(in srgb,var(--accent) 24%,var(--surface)) 0%,var(--surface) 72%)}
 .hero a{color:inherit;display:block;text-align:center;flex:1;min-width:0}
@@ -98,10 +98,10 @@ background:radial-gradient(120% 90% at 50% 0%,color-mix(in srgb,var(--accent) 24
 .coach .face{flex:none;width:40px;height:40px;border-radius:14px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-weight:800;font-size:18px}
 .coach .notes{flex:1;min-width:0}.coach .notes .note:first-child{margin-top:0}.coach h2{margin-bottom:4px}
 .sect{display:flex;justify-content:space-between;align-items:baseline;margin:22px 2px 10px}.sect h2{margin:0}
-.tiles{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+.tiles{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-bottom:14px}
 a.tile{display:flex;flex-direction:column;gap:2px;min-height:144px;padding:16px;border-radius:var(--r);background:var(--surface);border:1px solid var(--line);color:var(--ink);box-shadow:var(--shadow);position:relative;overflow:hidden;transition:transform .15s}
 a.tile:active{transform:scale(.985)}
-.tile .lab{display:flex;align-items:center;gap:9px;font-weight:650;font-size:14px;color:var(--ink2)}
+.tile .lab{display:flex;align-items:center;gap:7px;font-weight:650;font-size:13.5px;color:var(--ink2)}
 .tile .lab svg{width:30px;height:30px;padding:6px;border-radius:10px;color:var(--tc);background:color-mix(in srgb,var(--tc) 15%,transparent);flex:none}
 .tile .val{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:5px;font-size:34px;font-weight:780;letter-spacing:-.04em;line-height:1.05;margin-top:10px}
 .tile .val small{font-size:14px;font-weight:600;color:var(--muted);margin-left:0;letter-spacing:0}
@@ -160,13 +160,48 @@ details.confirm .ask{font-size:13px;color:var(--ink2);text-align:right}
 .opt input:checked+span{border-color:var(--accent);background:var(--soft);color:var(--ink)}
 .opt i{width:18px;height:18px;border-radius:50%;background:var(--sw);box-shadow:inset 0 0 0 2px rgba(255,255,255,.35)}
 /* chat */
-.chat{display:grid;gap:8px;margin-bottom:12px}.chat .m{max-width:86%;padding:9px 13px;border-radius:18px;line-height:1.4;overflow-wrap:anywhere;white-space:pre-wrap}
-.chat .m.user{justify-self:end;background:var(--accent);color:var(--on-accent);border-bottom-right-radius:6px}
-.chat .m.bot{justify-self:start;background:var(--surface);border:1px solid var(--line);border-bottom-left-radius:6px}
-.chat .m.note{justify-self:center;color:var(--muted);font-size:13px;background:none;padding:2px 6px}
+.chat{display:grid;gap:8px;margin-bottom:12px}.chat .msg{max-width:86%;padding:9px 13px;border-radius:18px;line-height:1.4;overflow-wrap:anywhere;white-space:pre-wrap}
+.chat .msg.user{justify-self:end;background:var(--accent);color:var(--on-accent);border-bottom-right-radius:6px}
+.chat .msg.bot{justify-self:start;background:var(--surface);border:1px solid var(--line);border-bottom-left-radius:6px}
+.chat .msg.note{justify-self:center;color:var(--muted);font-size:13px;background:none;padding:2px 6px}
 .chat .when{font-size:11px;color:var(--muted);margin-top:2px}
-.card.pend{border:2px solid var(--accent)}.card.pend .acts{display:flex;gap:8px;margin-top:10px}.card.pend form{margin:0}
+.card.pend{border:2px solid var(--accent)}.card.pend .acts{display:flex;gap:8px;margin-top:10px;align-items:center}.card.pend button{margin:0}.card.pend form{margin:0}
 .chatbox{position:sticky;bottom:calc(86px + env(safe-area-inset-bottom));display:flex;gap:8px;align-items:flex-end}.chatbox input{flex:1}
+
+/* refresh: Google Health tonal cards and soft sky, Lifesum friendliness, Cronometer bars */
+body{background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 16%,var(--base)) 0,var(--bg) 420px) no-repeat,var(--bg)}
+:root{--r:26px}
+.card{border-color:transparent}
+.hero2{display:grid;grid-template-columns:1.05fr 1fr;gap:12px;align-items:center;padding:16px;background:var(--surface)}
+.hero2 .bigring{color:inherit;display:block;text-align:center}.hero2 .bigring .ring{width:100%;max-width:170px}
+.hero2 .bigring span{display:block;font-weight:700;margin-top:2px;color:var(--ink2);font-size:14px}
+.hero2 .stack{display:grid;gap:10px}
+.hero2 .chip{display:flex;flex-direction:column;padding:10px 14px;border-radius:18px;color:var(--ink);
+background:color-mix(in srgb,var(--tc) 20%,var(--surface));min-width:0}
+.hero2 .chip .l{font-size:12.5px;font-weight:700;color:color-mix(in srgb,var(--tc) 55%,var(--ink))}
+.hero2 .chip b{font-size:24px;font-weight:780;letter-spacing:-.03em;line-height:1.15}
+.hero2 .chip small{font-size:12px;color:var(--ink2)}
+.qa{display:flex;gap:10px;margin:0 0 14px}
+.qb{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;min-height:48px;border-radius:999px;font-weight:700;
+background:color-mix(in srgb,var(--accent) 16%,var(--surface));color:var(--ink)}
+.qb svg{width:20px;height:20px;color:var(--accent)}
+.qb.pri{background:var(--accent);color:var(--on-accent)}.qb.pri svg{color:var(--on-accent)}
+.card.ai{background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 9%,var(--surface)),var(--surface))}
+.aihead{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;font-weight:600;margin-bottom:6px}
+.aihead svg{width:20px;height:20px;color:var(--accent)}
+a.tile{background:color-mix(in srgb,var(--tc) 8%,var(--surface));border-color:transparent}
+.tile .st{align-self:flex-start;margin-top:8px;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:700;
+background:color-mix(in srgb,var(--tc) 20%,var(--surface));color:var(--ink)}
+.tile .st+.val{margin-top:4px}
+.stat{border-color:transparent;background:color-mix(in srgb,var(--accent) 8%,var(--surface))}
+.chat .msg.user{background:color-mix(in srgb,var(--accent) 20%,var(--surface));color:var(--ink);border-radius:20px 20px 6px 20px}
+.chat .msg.bot{background:none;border:0;padding:4px 2px;max-width:100%;border-radius:0}
+.chat .msg.bot::before{content:"";display:block;width:20px;height:20px;margin-bottom:4px;background:var(--accent);
+-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z'/%3E%3C/svg%3E") center/contain no-repeat;
+mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z'/%3E%3C/svg%3E") center/contain no-repeat}
+.chatbox{padding:8px 8px 8px 16px;border-radius:999px;background:var(--surface);box-shadow:var(--shadow);border:1px solid var(--line)}
+.chatbox input{border:0!important;background:none!important;box-shadow:none!important;min-height:40px}
+.chatbox button.go{margin:0;min-height:44px;border-radius:999px}
 /* tabs */
 nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;justify-content:center;padding:0 14px calc(10px + env(safe-area-inset-bottom));pointer-events:none}
 nav.tabs .in{pointer-events:auto;display:flex;width:100%;max-width:440px;gap:2px;padding:6px;border-radius:28px;
@@ -201,6 +236,7 @@ ICONS = {
     "settings": "M4 7h10M18 7h2M4 17h2M10 17h10M14 5v4M6 15v4",
     "back": "M15 5l-7 7 7 7",
     "chat": "M4 5h16v11H9l-5 4z",
+    "spark": "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z",
     "sleep": "M20 14.5A8 8 0 1 1 9.5 4 6.5 6.5 0 0 0 20 14.5z",
     "steps": "M7 20c-2 0-3-2-3-4 0-3 2-6 4-6s3 2 3 5-2 5-4 5zM15 14c-1.6 0-2.4-1.6-2.4-3.2C12.6 8.5 14 6 15.6 6S18 7.8 18 10s-1.4 4-3 4z",
     "heart": "M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.4A4 4 0 0 1 19 10c0 5.6-7 10-7 10z",
@@ -259,9 +295,9 @@ def stats(items: list[tuple[str, str]]) -> str:
 
 
 def tile(href: str, name: str, ic: str, tint: str, value: str, unit: str, sub: str, spark: str = "",
-         wide: bool = False) -> str:
+         wide: bool = False, pill: str = "") -> str:
     return (f'<a class="tile{" wide" if wide else ""}" href="{esc(href)}" style="--tc:var({tint})">'
-            f'<span class="lab">{icon(ic)}{esc(name)}</span>'
+            f'<span class="lab">{icon(ic)}{esc(name)}</span>{f"<span class=st>{esc(pill)}</span>" if pill else ""}'
             f'<span class="val">{esc(value)}{f"<small>{esc(unit)}</small>" if unit else ""}</span>'
             f'<span class="sub">{esc(sub)}</span>{spark}</a>')
 
