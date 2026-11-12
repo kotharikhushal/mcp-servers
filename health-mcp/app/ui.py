@@ -159,6 +159,14 @@ details.confirm .ask{font-size:13px;color:var(--ink2);text-align:right}
 .opt span{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 15px;border-radius:999px;background:var(--surface2);border:2px solid transparent;font-weight:650;color:var(--ink2)}
 .opt input:checked+span{border-color:var(--accent);background:var(--soft);color:var(--ink)}
 .opt i{width:18px;height:18px;border-radius:50%;background:var(--sw);box-shadow:inset 0 0 0 2px rgba(255,255,255,.35)}
+/* chat */
+.chat{display:grid;gap:8px;margin-bottom:12px}.chat .m{max-width:86%;padding:9px 13px;border-radius:18px;line-height:1.4;overflow-wrap:anywhere;white-space:pre-wrap}
+.chat .m.user{justify-self:end;background:var(--accent);color:var(--on-accent);border-bottom-right-radius:6px}
+.chat .m.bot{justify-self:start;background:var(--surface);border:1px solid var(--line);border-bottom-left-radius:6px}
+.chat .m.note{justify-self:center;color:var(--muted);font-size:13px;background:none;padding:2px 6px}
+.chat .when{font-size:11px;color:var(--muted);margin-top:2px}
+.card.pend{border:2px solid var(--accent)}.card.pend .acts{display:flex;gap:8px;margin-top:10px}.card.pend form{margin:0}
+.chatbox{position:sticky;bottom:calc(86px + env(safe-area-inset-bottom));display:flex;gap:8px;align-items:flex-end}.chatbox input{flex:1}
 /* tabs */
 nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;justify-content:center;padding:0 14px calc(10px + env(safe-area-inset-bottom));pointer-events:none}
 nav.tabs .in{pointer-events:auto;display:flex;width:100%;max-width:440px;gap:2px;padding:6px;border-radius:28px;
@@ -192,6 +200,7 @@ ICONS = {
     "report": "M7 3h8l4 4v14H7zM15 3v4h4M10 12h6M10 16h6",
     "settings": "M4 7h10M18 7h2M4 17h2M10 17h10M14 5v4M6 15v4",
     "back": "M15 5l-7 7 7 7",
+    "chat": "M4 5h16v11H9l-5 4z",
     "sleep": "M20 14.5A8 8 0 1 1 9.5 4 6.5 6.5 0 0 0 20 14.5z",
     "steps": "M7 20c-2 0-3-2-3-4 0-3 2-6 4-6s3 2 3 5-2 5-4 5zM15 14c-1.6 0-2.4-1.6-2.4-3.2C12.6 8.5 14 6 15.6 6S18 7.8 18 10s-1.4 4-3 4z",
     "heart": "M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.4A4 4 0 0 1 19 10c0 5.6-7 10-7 10z",
@@ -208,7 +217,8 @@ def icon(name: str, size: int | None = None) -> str:
             f'stroke-linejoin="round" aria-hidden="true"><path d="{ICONS[name]}"/></svg>')
 
 
-TABS = (("/", "Today", "home"), ("/log", "Log", "plus"), ("/gp", "Report", "report"), ("/settings", "Settings", "settings"))
+TABS = (("/", "Today", "home"), ("/chat", "Chat", "chat"), ("/log", "Log", "plus"), ("/gp", "Report", "report"),
+        ("/settings", "Settings", "settings"))
 HEAD = ('<link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/apple-touch-icon.png">'
         '<link rel="icon" href="/icon-192.png"><meta name="theme-color" content="#F1F5F8" media="(prefers-color-scheme: light)">'
         '<meta name="theme-color" content="#0C1318" media="(prefers-color-scheme: dark)">'
@@ -218,11 +228,11 @@ HEAD = ('<link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touc
 
 def layout(title: str, body: str, *, name: str, active: str, csrf: str = "", flash: str = "",
            flash_err: bool = False, back: tuple[str, str] | None = None, tint: str | None = None,
-           mode: str = DEFAULT_MODE, palette: str = DEFAULT_PALETTE) -> str:
+           mode: str = DEFAULT_MODE, palette: str = DEFAULT_PALETTE, chat: bool = False) -> str:
     tabs = "".join(
         f'<a href="{h}"{" aria-current=page" if h == active else ""}{" class=plus" if i == "plus" else ""}>'
         + (f'<span class="b">{icon(i)}</span>' if i == "plus" else icon(i)) + f'<span>{esc(t)}</span></a>'
-        for h, t, i in TABS)
+        for h, t, i in TABS if chat or h != "/chat")
     left = (f'<a class="back" href="{esc(back[0])}">{icon("back")}{esc(back[1])}</a>' if back
             else '<span class="brand">Wellness</span>')
     fl = (f'<div class="flash{" err" if flash_err else ""}" role="status">'

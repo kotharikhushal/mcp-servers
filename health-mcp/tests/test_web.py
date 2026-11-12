@@ -696,3 +696,118 @@ def test_the_checks_catch_each_kind_of_bad_answer():
     assert "blood pressure without the GP" in problems(bad(points=["Your blood pressure is changing.", "a", "b"]), f)
     thin = dict(f, thin=True)
     assert "does not say the data is thin" in problems(json.dumps(ok), thin)
+
+
+# ---------------------------------------------------------------- chat
+def chat_answer(reply, **action):
+    return {"reply": reply, "action": action or {"kind": "none"}}
+
+
+def test_chat_logs_only_after_confirm_and_keeps_history(tmp_path, monkeypatch):
+    import json
+    c, stores, calls = ai_env(tmp_path, monkeypatch, [
+        chat_answer("I will save 78.4 kg as your weight. Press Confirm to save it.", kind="log_weight", kg=78.4)])
+    k = stores.get("khushal")
+    assert 'href="/chat"' in c.get("/").text
+    r = c.post("/chat/send", data={"csrf": "tok", "text": "log my weight 78.4"})
+    assert r.headers["location"] == "/chat" and not k.weight_readings(1)          # proposed, not saved
+    page = c.get("/chat").text
+    assert "Confirm to save" in page and "Save weight 78.4 kg" in page and "log my weight 78.4" in page
+    body = json.loads(calls[0].content)
+    assert body["messages"][-1]["content"] == "log my weight 78.4" and "Facts:" in body["messages"][1]["content"]
+    assert "err=" in c.post("/chat/send", data={"csrf": "tok", "text": "another"}).headers["location"]   # must decide first
+    pid = k.get_setting("chat_pending")
+    assert c.post("/chat/confirm", data={"csrf": "tok", "id": "wrong"}).headers["location"].find("err=") > 0
+    assert not k.weight_readings(1)
+    pid = json.loads(pid)["id"]
+    ok = c.post("/chat/confirm", data={"csrf": "tok", "id": pid})
+    assert "ok=" in ok.headers["location"] and k.weight_readings(1)[-1]["kg"] == 78.4
+    assert "err=" in c.post("/chat/confirm", data={"csrf": "tok", "id": pid}).headers["location"]   # no double save
+    assert len(k.weight_readings(1)) == 1
+    assert c.post("/chat/confirm", data={"id": pid}).status_code in (400, 403)                        # CSRF
+    # cancel path, then Shivani's chat is separate
+    c.post("/chat/send", data={"csrf": "tok", "text": "log my weight 78.4"})
+    pid2 = json.loads(k.get_setting("chat_pending"))["id"]
+    c.post("/chat/cancel", data={"csrf": "tok", "id": pid2})
+    assert k.get_setting("chat_pending") is None and len(k.weight_readings(1)) == 1
+    sh = signed_in(c, "shivani").get("/chat").text
+    assert "Clear chat history" not in sh and "Saved weight" not in sh
+    signed_in(c, "khushal")
+    c.post("/chat/clear", data={"csrf": "tok"})
+    assert "Clear chat history" not in c.get("/chat").text
+
+
+def test_chat_rejects_an_action_with_numbers_the_person_did_not_type(tmp_path, monkeypatch):
+    c, stores, calls = ai_env(tmp_path, monkeypatch, [
+        chat_answer("I will save 80 kg. Press Confirm.", kind="log_weight", kg=80)])
+    k = stores.get("khushal")
+    r = c.post("/chat/send", data={"csrf": "tok", "text": "log my weight 78.4"})
+    assert "err=" in r.headers["location"] and len(calls) == 2 and k.get_setting("chat_pending") is None
+
+
+def test_chat_history_is_capped_and_bad_replies_are_blocked(tmp_path, monkeypatch):
+    answers = [chat_answer("Your steps look fine.")]
+    c, stores, calls = ai_env(tmp_path, monkeypatch, answers)
+    k = stores.get("khushal")
+    for i in range(12):
+        c.post("/chat/send", data={"csrf": "tok", "text": f"question {i}"})
+    from app import chat
+    assert len(chat.load_history(k)) == chat.HISTORY_MAX
+    answers[0] = chat_answer("You have hypertension.")
+    r = c.post("/chat/send", data={"csrf": "tok", "text": "what is wrong with me"})
+    assert "err=" in r.headers["location"]
+
+
+def test_chat_needs_the_local_model(env):
+    c, _, _ = env
+    signed_in(c)
+    assert 'href="/chat"' not in c.get("/").text
+    assert "OLLAMA_URL" in c.get("/chat").text
+    assert "err=" in c.post("/chat/send", data={"csrf": "tok", "text": "hi"}).headers["location"]
+
+
+def test_chat_action_checks():
+    from app import chat
+    assert chat.check_action({"kind": "none"}, "hi") is None
+    a = chat.check_action({"kind": "log_bp", "systolic": 128, "diastolic": 84}, "bp 128/84")
+    assert a["summary"] == "Save blood pressure 128/84, now"
+    for bad, text in [({"kind": "log_bp", "systolic": 84, "diastolic": 128}, "bp 84 128"),
+                      ({"kind": "log_weight", "kg": 9}, "weight 9"),
+                      ({"kind": "log_meal", "name": "x", "kcal": 300}, "I ate x"),
+                      ({"kind": "delete_everything"}, "hi"), ({"kind": "add_shopping", "items": []}, "add")]:
+        with pytest.raises(ValueError):
+            chat.check_action(bad, text)
+    f = {"steps": {"daily_average": 7909}, "blood_pressure": {"latest_sitting_summary": "x", "latest_sitting_mixed": True}}
+    assert chat.reply_problems("Steps averaged 7909 a day.", f, "steps?", None) == []
+    assert any("not in the facts" in p for p in chat.reply_problems("You did 9,999 steps.", f, "steps?", None))
+    assert "claims to have saved" in chat.reply_problems("I have saved it.", f, "log", None)
+    assert "alarming blood-pressure wording" in chat.reply_problems("Your blood pressure readings are high. GP.", f, "bp", None)
+
+
+def test_chat_mealie_actions_resolve_first_then_run_on_confirm(tmp_path):
+    from app import chat
+    from app.store import Store
+
+    class FakeMealie:
+        added = None
+        def search(self, q, n): return [{"slug": "lentil-curry"}] if "lentil" in q else []
+        def recipe(self, slug):
+            return {"slug": slug, "name": "Lentil curry", "servings": 2,
+                    "nutrition_per_serving": {"kcal": 410, "protein_g": 20, "carbs_g": 50, "fat_g": 9, "salt_g": 1.1}}
+        def shopping_lists(self): return [{"id": "abc123", "name": "Weekly"}]
+        def add_shopping_items(self, lid, items):
+            FakeMealie.added = (lid, items)
+            return {"added": len(items)}
+
+    st = web.Stores(str(tmp_path), "khushal", "Europe/London").get("khushal")
+    m = FakeMealie()
+    a = chat.resolve(m, chat.check_action({"kind": "log_recipe", "recipe": "lentil curry", "servings": 1}, "log lentil curry"))
+    assert a["summary"] == "Log 1 serving(s) of Lentil curry, about 410 kcal" and not st.food_entries(1)
+    assert "Logged Lentil curry" in chat.execute(st, m, a) and st.food_entries(1)
+    s = chat.resolve(m, chat.check_action({"kind": "add_shopping", "items": ["milk", "eggs"]}, "add milk and eggs"))
+    assert 'milk, eggs' in s["summary"] and FakeMealie.added is None
+    assert chat.execute(st, m, s) == "Added 2 item(s) to Weekly" and FakeMealie.added == ("abc123", ["milk", "eggs"])
+    with pytest.raises(Exception):
+        chat.resolve(m, chat.check_action({"kind": "log_recipe", "recipe": "pizza"}, "log pizza"))
+    with pytest.raises(Exception):
+        chat.resolve(None, s)
