@@ -236,6 +236,36 @@ def register(mcp: FastMCP, store: Store) -> None:
         the user actually stated, and say which time you used."""
         return store.log_weight(kg, _parse_when(store, when))
 
+    @mcp.tool(annotations=WRITE)
+    def import_apple_health(data: str, preview: bool = False) -> dict[str, Any]:
+        """Add a Health Auto Export (Apple Health) export that someone has given the user in chat to THEIR OWN
+        record. The `person` argument is required for this tool: the name of the person the export belongs to (for example shivani). Ask if it
+        is not clear whose file it is, and never guess, because the wrong person would get the data. `data` is the
+        export's JSON text. A zip must be opened first, in the sandbox, and the JSON passed here; a large export
+        should be cut down first with code, keeping the same layout (data.metrics and data.workouts) and only the
+        days and metrics that matter (steps, sleep_analysis, heart_rate, resting_heart_rate, weight_body_mass,
+        active_energy, basal_energy_burned, workouts). Importing an overlapping export again is safe. Use
+        preview=true to see what would be added without saving it, and tell the user what was added."""
+        from . import apple
+        from .person import CURRENT
+        if not CURRENT.get():   # never fall back to the default person for an import
+            raise ValueError("Say whose export this is by setting person (for example person='shivani').")
+        if len(data) > apple.MAX_JSON:
+            raise ValueError("That export is too large to pass here. Cut it down to the recent days first.")
+        try:
+            doc = apple.load_upload(data.encode("utf-8"))
+            payload, heart = apple.convert(doc, store.tz)
+        except apple.ImportError_ as e:
+            raise ValueError(str(e)) from e
+        if preview:
+            n = {k: len(v) for k, v in payload.items() if isinstance(v, list) and v}
+            return {"saved": False, "would_add": n, "heart_rate_days": len(heart)}
+        counts = store.ingest(payload)
+        days = store.import_daily_heart(heart)
+        summary = apple.summarise(counts, days)
+        store.set_setting("last_import", f'{store.local(store.now()).strftime("%-d %b %Y %H:%M")}: {summary} (from chat)')
+        return {"saved": True, "summary": summary}
+
     @mcp.tool(annotations=DELETE)
     def delete_manual_entry(kind: str, entry_id: int) -> dict[str, Any]:
         """Delete a blood pressure, meal or weight entry that was logged manually

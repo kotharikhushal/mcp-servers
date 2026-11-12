@@ -125,3 +125,21 @@ def test_ai_analysis_is_saved_per_person_and_shown_on_the_home_page(tmp_path):
     assert "<script" not in page
     call(mcp, "set_ai_analysis", headline="<script>x</script>", points=["a"])
     assert "<script>x" not in views.today_page(k, "Khushal")
+
+
+def test_import_apple_health_needs_a_person_and_goes_only_to_them(tmp_path):
+    import asyncio, json
+    from tests.test_mealie import BASE, call
+    from tests.test_apple import EXPORT
+    mcp, k, _ = server.create(dict(BASE, DATA_DIR=str(tmp_path), WEB_USERS="khushal:Khushal,shivani:Shivani"))
+    text = json.dumps(EXPORT)
+    with pytest.raises(Exception, match="whose export"):
+        asyncio.run(mcp.call_tool("import_apple_health", {"data": text}))
+    r = asyncio.run(mcp.call_tool("import_apple_health", {"data": text, "person": "shivani", "preview": True}))
+    assert "false" in str(r).lower()
+    asyncio.run(mcp.call_tool("import_apple_health", {"data": text, "person": "shivani"}))
+    out = call(mcp, "get_steps", days=30, person="shivani")
+    assert "9185" in json.dumps(out)
+    assert "9185" not in json.dumps(call(mcp, "get_steps", days=30))          # the default person is untouched
+    with pytest.raises(Exception, match="valid JSON|Health Auto Export"):
+        asyncio.run(mcp.call_tool("import_apple_health", {"data": "nope", "person": "shivani"}))

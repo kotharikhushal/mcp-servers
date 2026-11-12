@@ -184,7 +184,7 @@ async def main() -> int:
 
         for label, token in (("JWT", mint()), ("opaque token", OPAQUE)):
             out = await mcp_session(token, label)
-            check(f"[{label}] 19 tools listed", len(out["tools"]) == 19, str(out["tools"]))
+            check(f"[{label}] 20 tools listed", len(out["tools"]) == 20, str(out["tools"]))
             today = out["summary"]["days"][-1]
             check(f"[{label}] summary has synced steps, HR, weight",
                   today["steps"] == 4200 and today["heart_rate_min"] == 64 and today["weight_kg"] == 78.4, str(today))

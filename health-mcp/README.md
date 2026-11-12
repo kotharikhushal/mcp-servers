@@ -119,6 +119,8 @@ steps, sleep with stages, daily heart rate summaries, weight, workouts and calor
 record. Importing an overlapping export again is safe. The export holds daily summaries, so there is no
 minute-by-minute heart rate for Apple data.
 
+**Import from chat.** The connector tool `import_apple_health` does the same when someone gives Claude their export in a chat. It requires `person` (the name of the person the file belongs to) and refuses to run without it, so a file can never land on the default person by accident. Claude opens the zip in its own sandbox, cuts a large export down to the days and metrics that matter, and passes the JSON text; `preview` shows what would be added without saving it. The text is limited by what a chat can send, so for a big export the Settings page upload is the better route.
+
 ## Mealie (optional)
 Set `MEALIE_URL` and `MEALIE_API_TOKEN` in `.env` (token from Mealie, User profile, API tokens) and restart.
 
