@@ -29,7 +29,7 @@ from starlette.routing import Route
 
 from pathlib import Path
 
-from . import analysis, apple, mealie as mealie_mod, pages, reminders, views
+from . import analysis, apple, chat as chat_mod, mealie as mealie_mod, pages, reminders, views
 from .auth import OIDCVerifier
 from .store import Store
 from .tools import _parse_when
@@ -202,7 +202,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         return HTMLResponse(pages.layout(title, body, name=users[s["u"]], active=active, csrf=s["csrf"],
                                          flash=flash[:200], flash_err=bool(request.query_params.get("err")),
                                          back=back, tint=tint, mode=stores.get(s["u"]).get_setting("mode") or "auto",
-                                         palette=stores.get(s["u"]).get_setting("palette") or "tide"))
+                                         palette=stores.get(s["u"]).get_setting("palette") or "tide", chat=bool(ollama_url)))
 
     menu_cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 
@@ -290,6 +290,68 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             return back(str(e), True, "/")
         store.set_setting("ai_analysis", json.dumps({**res, "at": store.now().isoformat(), "source": ollama_model}))
         return back("Analysis refreshed", False, "/")
+
+    async def chat_get(request: Request, s: dict[str, Any], store: Store) -> Response:
+        return page("Chat", views.chat_page(store, s["csrf"], chat_mod.load_history(store), chat_mod.load_pending(store),
+                                            bool(ollama_url), ollama_model), s, "/chat", request)
+
+    async def chat_send(request: Request, s: dict[str, Any], store: Store) -> Response:
+        if not ollama_url:
+            return back("The local model is not set up", True, "/chat")
+        text = " ".join(str(request.state.form.get("text", "")).split())[:chat_mod.MSG_MAX]
+        if not text:
+            return back("Type a message first", True, "/chat")
+        if chat_mod.load_pending(store):
+            return back("Confirm or cancel the saved suggestion first", True, "/chat")
+        history = chat_mod.load_history(store)
+        menu = None
+        if mealie is not None:
+            try:
+                menu = await asyncio.to_thread(load_menu, store, s["u"])
+            except mealie_mod.MealieError:
+                menu = None
+        facts = chat_mod.chat_facts(store, menu)
+        try:
+            async with httpx.AsyncClient(timeout=180) as c:
+                reply, action = await chat_mod.respond(c, ollama_url, ollama_model, facts, history, text)
+            if action:
+                action = await asyncio.to_thread(chat_mod.resolve, mealie, action)
+        except (chat_mod.ChatError, mealie_mod.MealieError) as e:
+            log.warning("chat failed for %s: %s", s["u"], e)
+            chat_mod.add_message(store, "user", text)
+            chat_mod.add_message(store, "note", str(e)[:300])
+            return back(str(e)[:150], True, "/chat")
+        chat_mod.add_message(store, "user", text)
+        chat_mod.add_message(store, "bot", reply)
+        if action:
+            chat_mod.set_pending(store, action)
+        return RedirectResponse("/chat", status_code=303)
+
+    async def chat_confirm(request: Request, s: dict[str, Any], store: Store) -> Response:
+        p = chat_mod.load_pending(store)
+        if not p or not hmac.compare_digest(str(request.state.form.get("id", "")), str(p["id"])):
+            return back("That suggestion is no longer waiting", True, "/chat")
+        chat_mod.clear_pending(store)       # cleared first, so a double tap cannot save twice
+        try:
+            msg = await asyncio.to_thread(chat_mod.execute, store, mealie, p)
+        except (mealie_mod.MealieError, ValueError) as e:
+            chat_mod.add_message(store, "note", f"Not saved: {e}"[:300])
+            return back(str(e)[:150], True, "/chat")
+        chat_mod.add_message(store, "note", msg)
+        menu_cache.clear()
+        return back(msg, False, "/chat")
+
+    async def chat_cancel(request: Request, s: dict[str, Any], store: Store) -> Response:
+        p = chat_mod.load_pending(store)
+        if p and hmac.compare_digest(str(request.state.form.get("id", "")), str(p["id"])):
+            chat_mod.clear_pending(store)
+            chat_mod.add_message(store, "note", "Cancelled, nothing saved")
+        return RedirectResponse("/chat", status_code=303)
+
+    async def chat_clear(request: Request, s: dict[str, Any], store: Store) -> Response:
+        chat_mod.save_history(store, [])
+        chat_mod.clear_pending(store)
+        return back("Chat history cleared", False, "/chat")
 
     async def meals_skip(request: Request, s: dict[str, Any], store: Store) -> Response:
         f = request.state.form
@@ -599,6 +661,10 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         Route("/meals/eat", authed(meals_eat, post=True), methods=["POST"]),
         Route("/meals/swap", authed(swap_get)), Route("/meals/swap", authed(swap_post, post=True), methods=["POST"]),
         Route("/meals/skip", authed(meals_skip, post=True), methods=["POST"]),
+        Route("/chat", authed(chat_get)), Route("/chat/send", authed(chat_send, post=True), methods=["POST"]),
+        Route("/chat/confirm", authed(chat_confirm, post=True), methods=["POST"]),
+        Route("/chat/cancel", authed(chat_cancel, post=True), methods=["POST"]),
+        Route("/chat/clear", authed(chat_clear, post=True), methods=["POST"]),
         Route("/analysis/refresh", authed(analysis_refresh, post=True), methods=["POST"]),
         Route("/settings/appearance", authed(appearance_post, post=True), methods=["POST"]),
         Route("/settings/goal-weight", authed(goal_weight, post=True), methods=["POST"]),

@@ -152,3 +152,14 @@ blood-pressure wording, and thin data admitted as thin. A failed answer is retri
 earlier analysis is kept. One refresh per person per hour. Ollama is called from the server, so it only needs to be
 reachable from the app container (do not expose Ollama to the internet: it has no login). Without `OLLAMA_URL`
 the analysis is written by Claude when asked ("refresh wellness") through `set_ai_analysis`.
+
+## Chat (optional, same local model)
+
+With `OLLAMA_URL` set, a **Chat** tab appears. You can ask about your numbers, today's food and today's Mealie plan,
+and ask it to log things: weight, blood pressure, a meal with kcal, a Mealie recipe, or items for your Mealie shopping
+list. The model never writes data. It proposes one action, the app checks it (known kind, sane ranges, every number
+must be one you typed), and it waits as a **Confirm / Cancel** card for 30 minutes. Nothing is saved until you press
+Confirm. There is no delete or meal-plan editing in chat. Replies get the same checks as the analysis (no invented
+numbers, no diagnosis or medication wording, blood pressure only with the GP). The last 20 messages are kept per person
+and can be cleared; they are only sent back to the model as context, and the model is never trained by them.
+Meal planning stays with Claude through the connector.

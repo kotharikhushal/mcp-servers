@@ -209,6 +209,31 @@ def meals_card(store: Store, menu: list[dict[str, Any]] | None, error: bool, csr
             f'<p class="m" style="margin:10px 0 0">{esc(foot)}</p></div>')
 
 
+def chat_page(store: Store, csrf: str, history: list[dict[str, Any]], pending: dict[str, Any] | None, enabled: bool,
+              model: str = "") -> str:
+    tok = f'<input type="hidden" name="csrf" value="{esc(csrf)}">'
+    if not enabled:
+        return ('<div class="card"><h2>Chat</h2><p class="muted">Chat needs the local model. Set OLLAMA_URL on the '
+                'wellness container, then restart it.</p></div>')
+    msgs = "".join(f'<div class="m {esc(m["r"])}">{esc(m["t"])}</div>' for m in history) or \
+        '<div class="m note">Ask about your numbers, or say things like "log my weight 78.4" or "add milk and eggs to the shopping list".</div>'
+    pend = ""
+    if pending:
+        pend = (f'<div class="card pend"><h2>Confirm to save</h2><p>{esc(pending["summary"])}</p><div class="acts">'
+                f'<form method="post" action="/chat/confirm">{tok}<input type="hidden" name="id" value="{esc(pending["id"])}">'
+                f'<button class="go">Confirm</button></form>'
+                f'<form method="post" action="/chat/cancel">{tok}<input type="hidden" name="id" value="{esc(pending["id"])}">'
+                f'<button class="ghost">Cancel</button></form></div></div>')
+    clear = (f'<form method="post" action="/chat/clear" style="margin-top:14px">{tok}'
+             f'<button class="mini ghost">Clear chat history</button></form>' if history else "")
+    return (f'<div class="chat" role="log" aria-label="Chat">{msgs}</div>{pend}'
+            f'<form method="post" action="/chat/send" class="chatbox">{tok}'
+            f'<input name="text" maxlength="500" required autocomplete="off" placeholder="Ask or log something" aria-label="Message">'
+            f'<button class="go">Send</button></form>'
+            f'<p class="muted" style="font-size:12px;margin-top:10px">Written by {esc(model or "the local model")}. Nothing is saved until you press Confirm. '
+            f'Not medical advice.</p>{clear}')
+
+
 def _ai_card(store: Store, csrf: str = "", can_refresh: bool = False) -> str:
     """The latest AI analysis (written by Claude through the connector, or by the local model), or nothing."""
     import json
