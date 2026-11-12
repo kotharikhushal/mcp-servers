@@ -61,22 +61,36 @@ def _h(seconds: float) -> str:
     return f"{m // 60} h {m % 60:02d} m"
 
 
+def bp_over_text(r: dict) -> str:
+    """Say which number is over the home threshold; both are not always."""
+    sys_hi, dia_hi = r["systolic"] >= HOME_BP_HIGH[0], r["diastolic"] >= HOME_BP_HIGH[1]
+    n = len(r.get("readings", [])) or 1
+    lead = f'Your last sitting averaged {r["systolic"]}/{r["diastolic"]}' if n > 1 else f'Your last reading was {r["systolic"]}/{r["diastolic"]}'
+    if sys_hi and dia_hi:
+        return f'{lead}. Both numbers are above the {HOME_BP_HIGH[0]}/{HOME_BP_HIGH[1]} home threshold.'
+    if dia_hi:
+        return (f'{lead}. The bottom number is above the {HOME_BP_HIGH[1]} home threshold; '
+                f'the top number is under {HOME_BP_HIGH[0]}.')
+    return (f'{lead}. The top number is above the {HOME_BP_HIGH[0]} home threshold; '
+            f'the bottom number is under {HOME_BP_HIGH[1]}.')
+
+
 def notes_for(store: Store) -> list[tuple[str, str]]:
     """(level, text) coaching notes from the person's own recent data."""
     notes: list[tuple[str, str]] = []
     now = store.local(store.now())
     today = now.date()
-    bp = store.bp_readings(3)
+    from .views import bp_sessions  # late import: views imports this module
+    bp = bp_sessions(store.bp_readings(3))
     if bp:
-        last = bp[-1]
+        last = bp[-1]  # latest sitting; two readings a few minutes apart are averaged, as on the tile
         if last["systolic"] >= BP_URGENT[0] or last["diastolic"] >= BP_URGENT[1]:
             notes.append(("bad", f'Your last reading was {last["systolic"]}/{last["diastolic"]}. A reading this '
                           'high should be checked with your GP or NHS 111 today. With chest pain, '
                           'breathlessness, confusion or a severe headache, call 999.'))
         elif last["systolic"] >= HOME_BP_HIGH[0] or last["diastolic"] >= HOME_BP_HIGH[1]:
-            notes.append(("warn", f'Last reading {last["systolic"]}/{last["diastolic"]} is above the '
-                          f'{HOME_BP_HIGH[0]}/{HOME_BP_HIGH[1]} home threshold. Keep logging morning and '
-                          'evening: your GP will look at the pattern across several days.'))
+            notes.append(("warn", bp_over_text(last) + " Keep logging morning and evening: your GP will "
+                          "look at the pattern across several days."))
     todays = [r for r in bp if r["time"][:10] == today.isoformat()]
     if not todays and now.hour >= 9:
         notes.append(("", "No blood pressure logged today yet. Sit quietly for 5 minutes, arm supported, "
