@@ -143,13 +143,13 @@ def test_log_recipe_as_meal_scales_and_refuses_when_no_nutrition(tmp_path, monke
     mcp, store, _ = server.create(dict(BASE, DATA_DIR=str(tmp_path), MEALIE_URL="https://m.example.com", MEALIE_API_TOKEN="tok"))
     out = call(mcp, "log_recipe_as_meal", slug="aloo-gobi", servings=1.5, when="2026-11-11T14:00")
     assert out["logged"] is True and out["kcal"] == 315
-    e = store.food_entries(5)[-1]
+    e = store.food_entries(400)[-1]
     assert e["name"] == "Aloo gobi x1.5 (from Mealie)" and e["kcal"] == 315 and e["salt_g"] == 1.5 and e["time"] == "2026-11-11 14:00"
-    n = len(store.food_entries(5))
+    n = len(store.food_entries(400))
     assert call(mcp, "log_recipe_as_meal", slug="mystery")["logged"] is False
     assert "error" in call(mcp, "log_recipe_as_meal", slug="aloo-gobi", servings=0)
     assert "error" in call(mcp, "log_recipe_as_meal", slug="nope")
-    assert len(store.food_entries(5)) == n
+    assert len(store.food_entries(400)) == n
     assert call(mcp, "mealie_status")["version"] == "v2.3.0"
 
 

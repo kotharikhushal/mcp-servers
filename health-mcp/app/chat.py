@@ -36,7 +36,7 @@ Rules:
 - Never diagnose, never name a medical condition, never comment on medication or doses. Do not set new health targets.
 - To save something, propose ONE action and say in the reply what you will save and that they must press Confirm. Only propose an action when the person clearly asks to log or add something, and only with numbers they typed. Never claim it is saved yet.
 - If asked what you can do, say briefly: answer questions about their numbers, today's food and plan, and, after they press Confirm, log weight, blood pressure, a meal with kcal, a recipe from their recipe book, or shopping items. Meal planning is done by asking Claude.
-- Actions: log_weight (kg), log_bp (systolic, diastolic, optional pulse), log_meal (name, kcal, optional protein_g, salt_g). If they gave no kcal, still propose log_meal with your best estimate of kcal for the whole meal and "estimate": true, and add up every part (each item and the milk or oil in drinks and cooking) so you do not undercount, and say in the reply it is an estimate they can edit before confirming. If they gave kcal, use exactly theirs. log_recipe (recipe = words to find it in their recipe book, servings), add_shopping (items = list of short item names). Otherwise use "none".
+- Actions: log_weight (kg), log_bp (systolic, diastolic, optional pulse), log_meal (name, kcal, optional protein_g, salt_g). If what they ate matches a name in "recipe_book", or they say it is in Mealie or their recipe book, use log_recipe with that name and never log_meal: the recipe's own numbers are used. Otherwise, if they gave no kcal, still propose log_meal with your best estimate of kcal for the whole meal and "estimate": true, and add up every part (each item and the milk or oil in drinks and cooking) so you do not undercount, and say in the reply it is an estimate they can edit before confirming. If they gave kcal, use exactly theirs. log_recipe (recipe = the name from "recipe_book" in the facts, servings = what they said, 1 if not said, no kcal), add_shopping (items = list of short item names). Otherwise use "none".
 Return JSON only: {"reply": string up to 500 characters, "action": {"kind": one of none|log_weight|log_bp|log_meal|log_recipe|add_shopping, plus the fields that action needs}}."""
 
 SCHEMA = {
@@ -338,6 +338,67 @@ async def respond(client: httpx.AsyncClient, url: str, model: str, facts: dict[s
     raise ChatError("The model's answer failed the safety checks (" + "; ".join(last) + "). Try rewording.")
 
 
+# ---------------------------------------------------------------- finding a recipe from words
+_STOP = {"a", "an", "and", "the", "with", "in", "on", "of", "for", "my", "me", "i", "ate", "eat", "had", "have", "today", "tonight",
+         "lunch", "dinner", "breakfast", "snack", "supper", "recipe", "recipes", "mealie", "book", "is", "was", "already", "present",
+         "this", "that", "some", "x", "one", "estimate", "from", "it", "as", "add", "log", "please"}
+_ASKED_FOR_RECIPE = re.compile(r"\b(mealie|recipe book|recipe)\b", re.I)
+
+
+def _words(text: str) -> set[str]:
+    out = set()
+    for w in re.findall(r"[a-z]+", text.lower()):
+        if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+            w = w[:-1]
+        if w not in _STOP:
+            out.add(w)
+    return out
+
+
+def match_recipe(recipes: list[dict[str, Any]], text: str, strict: bool = True) -> dict[str, Any] | None:
+    """The one recipe whose name words are (nearly) all in the text, or None. strict=False is for when they said it is in Mealie."""
+    want = _words(text)
+    need = 0.75 if strict else 0.5
+    best: list[tuple[float, int, int, dict[str, Any]]] = []
+    for r in recipes:
+        name_words = _words(str(r.get("name") or ""))
+        if not name_words or not r.get("slug"):
+            continue
+        hit = len(name_words & want)
+        score = hit / len(name_words)
+        if score >= need and (hit >= 2 or len(name_words) == 1):
+            best.append((score, hit, -len(name_words), r))
+    if not best:
+        return None
+    best.sort(key=lambda b: b[:3], reverse=True)
+    if len(best) > 1 and best[0][:3] == best[1][:3]:
+        return None                       # two equally good matches: do not guess
+    return best[0][3]
+
+
+def recipe_names(mealie: Any) -> list[dict[str, Any]]:
+    """Name and slug of every recipe, or [] when there is no Mealie or it fails (chat then works as before)."""
+    from . import mealie as mealie_mod
+    if mealie is None or not hasattr(mealie, "all_recipes"):
+        return []
+    try:
+        return [{"slug": r.get("slug"), "name": r.get("name")} for r in mealie.all_recipes() if r.get("slug") and r.get("name")]
+    except mealie_mod.MealieError:
+        return []
+
+
+def prefer_recipe(recipes: list[dict[str, Any]], action: dict[str, Any] | None, user_text: str) -> tuple[dict[str, Any] | None, str | None]:
+    """An estimated meal that is really one of their recipes becomes log_recipe, so the recipe's own numbers are used.
+    Returns (action, replacement reply or None)."""
+    if not action or action["kind"] != "log_meal" or not action.get("estimate") or not recipes:
+        return action, None
+    hit = match_recipe(recipes, f"{user_text} {action['name']}", strict=not _ASKED_FOR_RECIPE.search(user_text))
+    if not hit:
+        return action, None
+    return ({"kind": "log_recipe", "recipe": hit["name"], "servings": 1.0, "summary": ""},
+            f"That is {hit['name']} in your recipe book, so I will use its own nutrition. Press Confirm to save it.")
+
+
 # ---------------------------------------------------------------- running a confirmed action
 def execute(store: Store, mealie: Any, p: dict[str, Any]) -> str:
     """Do the saved action. Returns a short message. Raises on failure."""
@@ -387,6 +448,9 @@ def resolve(mealie: Any, a: dict[str, Any]) -> dict[str, Any]:
         raise mealie_mod.MealieError("Mealie is not connected")
     if a["kind"] == "log_recipe":
         hits = mealie.search(a["recipe"], 3)
+        if not hits:
+            found = match_recipe(recipe_names(mealie), a["recipe"], strict=False)
+            hits = [found] if found else []
         if not hits:
             raise mealie_mod.MealieError(f'No recipe found for "{a["recipe"]}"')
         rec = mealie.recipe(hits[0]["slug"])

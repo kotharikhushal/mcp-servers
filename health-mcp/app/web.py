@@ -315,9 +315,14 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
             except mealie_mod.MealieError:
                 menu = None
         facts = chat_mod.chat_facts(store, menu)
+        recipes = await asyncio.to_thread(chat_mod.recipe_names, mealie_for(s["u"]))
+        if recipes:
+            facts["recipe_book"] = [r["name"] for r in recipes][:80]
         try:
             async with httpx.AsyncClient(timeout=180) as c:
                 reply, action = await chat_mod.respond(c, ollama_url, ollama_model, facts, history, text)
+            action, swapped = chat_mod.prefer_recipe(recipes, action, text)
+            reply = swapped or reply
             if action:
                 action = chat_mod.reuse_history(store, action)
                 action = await asyncio.to_thread(chat_mod.resolve, mealie_for(s["u"]), action)

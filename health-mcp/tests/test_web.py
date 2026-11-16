@@ -891,3 +891,93 @@ def test_chat_allows_food_arithmetic_but_not_for_blood_pressure(tmp_path):
     assert any("not in the facts" in p for p in ok("You have 777 kcal left."))
     f["blood_pressure"] = {"latest_sitting_summary": "x", "latest_sitting_mixed": False}
     assert any("not in the facts" in p for p in ok("Your blood pressure is 920 over the GP threshold."))
+
+
+RECIPES = [{"slug": "egg-bhurji-wrap-with-salad", "name": "Egg Bhurji Wrap with Salad"},
+           {"slug": "masala-egg-bhurji", "name": "Masala Egg Bhurji"},
+           {"slug": "boiled-egg-salad", "name": "Boiled Egg Salad"},
+           {"slug": "lentil-curry", "name": "Lentil curry"}]
+
+
+def test_chat_match_recipe_picks_the_obvious_one_and_never_guesses():
+    from app import chat
+    assert chat.match_recipe(RECIPES, "I ate egg bhurji in tortilla wrap today for lunch")["slug"] == "egg-bhurji-wrap-with-salad"
+    assert chat.match_recipe(RECIPES, "I had 2 boiled eggs") is None                        # too loose to swap in a recipe
+    assert chat.match_recipe(RECIPES, "I had a boiled egg and a green salad")["slug"] == "boiled-egg-salad"
+    assert chat.match_recipe(RECIPES, "pizza") is None
+    twin = [{"slug": "a", "name": "Lentil soup"}, {"slug": "b", "name": "Lentil stew"}]
+    assert chat.match_recipe(twin, "lentil", strict=False) is None or chat.match_recipe(twin, "lentil", strict=False)
+    assert chat.match_recipe([{"slug": "a", "name": "Lentil soup"}, {"slug": "b", "name": "Lentil soup"}], "lentil soup") is None
+
+
+def test_chat_estimated_meal_becomes_the_recipe_when_it_is_in_the_recipe_book():
+    from app import chat
+    est = chat.check_action({"kind": "log_meal", "name": "egg bhurji in tortilla wrap", "kcal": 450, "estimate": True},
+                            "I ate egg bhurji in tortilla wrap today for lunch. The recipe is already present in mealie")
+    assert est["kind"] == "log_meal" and est["estimate"]
+    act, reply = chat.prefer_recipe(RECIPES, est, "I ate egg bhurji in tortilla wrap today for lunch. The recipe is already present in mealie")
+    assert act["kind"] == "log_recipe" and act["recipe"] == "Egg Bhurji Wrap with Salad" and act["servings"] == 1.0
+    assert "its own nutrition" in reply and "Confirm" in reply
+    # no match, typed kcal, no recipes, or already a recipe: left alone
+    other = chat.check_action({"kind": "log_meal", "name": "2 bananas", "kcal": 200, "estimate": True}, "I ate 2 bananas")
+    assert chat.prefer_recipe(RECIPES, other, "I ate 2 bananas") == (other, None)
+    typed = chat.check_action({"kind": "log_meal", "name": "egg bhurji wrap", "kcal": 400}, "egg bhurji wrap 400 kcal")
+    assert chat.prefer_recipe(RECIPES, typed, "egg bhurji wrap 400 kcal") == (typed, None)
+    assert chat.prefer_recipe([], est, "egg bhurji wrap") == (est, None)
+    assert chat.prefer_recipe(RECIPES, None, "x") == (None, None)
+
+
+def test_chat_recipe_names_survive_a_mealie_failure_and_resolve_falls_back_to_local_matching():
+    from app import chat, mealie as mealie_mod
+
+    class Down:
+        def all_recipes(self): raise mealie_mod.MealieError("down")
+
+    class Fake:
+        def all_recipes(self): return [{"slug": r["slug"], "name": r["name"]} for r in RECIPES]
+        def search(self, q, n): return []
+        def recipe(self, slug):
+            return {"slug": slug, "name": "Egg Bhurji Wrap with Salad", "servings": 1,
+                    "nutrition_per_serving": {"kcal": 450, "protein_g": 25}}
+
+    assert chat.recipe_names(Down()) == [] and chat.recipe_names(None) == [] and chat.recipe_names(object()) == []
+    a = chat.resolve(Fake(), {"kind": "log_recipe", "recipe": "Egg Bhurji Wrap with Salad", "servings": 1.0, "summary": ""})
+    assert a["slug"] == "egg-bhurji-wrap-with-salad" and "450 kcal" in a["summary"]
+
+
+def test_chat_send_swaps_an_estimate_for_the_recipe_and_tells_the_model_the_recipe_names(tmp_path, monkeypatch):
+    import json
+    from app import chat
+
+    class FakeMealie:
+        def day_menu(self, day): return []
+        def all_recipes(self): return [{"slug": r["slug"], "name": r["name"]} for r in RECIPES]
+        def search(self, q, n): return []
+        def recipe(self, slug):
+            return {"slug": slug, "name": "Egg Bhurji Wrap with Salad", "servings": 1,
+                    "nutrition_per_serving": {"kcal": 450, "protein_g": 25, "carbs_g": 40, "fat_g": 20, "salt_g": 1.2}}
+
+    ans = chat_answer("I will save the egg bhurji wrap as a meal. Press Confirm.", kind="log_meal",
+                      name="egg bhurji in tortilla wrap", kcal=450, estimate=True)
+    real = httpx.AsyncClient
+    calls = []
+
+    def fake(request):
+        calls.append(request)
+        return httpx.Response(200, json={"message": {"content": json.dumps(ans)}})
+
+    monkeypatch.setattr(web.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(fake), **kw))
+    stores = web.Stores(str(tmp_path), "khushal", "Europe/London")
+    app = web.create_app(dict(ENV, OLLAMA_URL="http://ollama.test:9068", OLLAMA_MODEL="gemma4:12b"), stores, USERS, FakeVerifier(),
+                         http=real(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))), mealie=FakeMealie())
+    c = signed_in(TestClient(app, base_url=BASE, follow_redirects=False))
+    k = stores.get("khushal")
+    c.post("/chat/send", data={"csrf": "tok", "text": "I ate egg bhurji in tortilla wrap today for lunch. The recipe is already present in mealie"})
+    assert "Egg Bhurji Wrap with Salad" in json.loads(calls[0].content)["messages"][1]["content"]     # names are in the facts
+    page = c.get("/chat").text
+    assert "its own nutrition" in page and "Log 1 serving(s) of Egg Bhurji Wrap with Salad, about 450 kcal" in page
+    assert 'name="kcal"' not in page and not k.food_entries(1)                                         # not an editable estimate
+    pid = json.loads(k.get_setting("chat_pending"))["id"]
+    assert "ok=" in c.post("/chat/confirm", data={"csrf": "tok", "id": pid}).headers["location"]
+    e = k.food_entries(1)[-1]
+    assert e["name"] == "Egg Bhurji Wrap with Salad x1 (from Mealie)" and e["kcal"] == 450 and e["protein_g"] == 25
