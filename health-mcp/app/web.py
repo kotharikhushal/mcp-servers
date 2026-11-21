@@ -654,6 +654,12 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
     async def healthz(request: Request) -> Response:
         return JSONResponse({"ok": True})
 
+    async def withings_callback(request: Request) -> Response:
+        # Withings checks this address when the developer app is registered, and sends people
+        # back to it after they allow access. The sign-in step comes later; for now it only
+        # has to answer, and it reveals nothing.
+        return JSONResponse({"ok": True})
+
     return Starlette(routes=[
         Route("/", authed(today)), Route("/log", authed(log_get)),
         Route("/sleep", authed(detail("Sleep", "/sleep", "--c-sleep", lambda st, c, d: views.sleep_page(st, d)))),
@@ -688,6 +694,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         Route("/settings/goal-weight", authed(goal_weight, post=True), methods=["POST"]),
         Route("/logout", authed(logout, post=True), methods=["POST"]),
         Route("/login", login), Route("/callback", callback), Route("/healthz", healthz),
+        Route("/withings/callback", withings_callback),
     ])
 
 

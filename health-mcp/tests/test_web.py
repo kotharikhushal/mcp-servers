@@ -443,7 +443,7 @@ def test_goal_weight_is_optional_and_drives_the_weight_page(env):
     base = {"csrf": "tok", "steps_goal": "10000", "sleep_goal": "8"}
     assert "err=" in c.post("/settings/goals", data={**base, "goal_weight": "20"}).headers["location"]
     for i, kg in enumerate((75.0, 74.8, 74.6, 74.7, 74.4)):
-        k.log_weight(kg, datetime(2026, 11, 7 + i, 7, 30, tzinfo=timezone.utc))
+        k.log_weight(kg, datetime.now(timezone.utc).replace(hour=7, minute=30) - timedelta(days=4 - i))   # recent, whatever today is
     assert "Set a goal weight" in c.get("/weight").text
     assert "ok=" in c.post("/settings/goals", data={**base, "goal_weight": "70"}).headers["location"]
     w = c.get("/weight").text
@@ -981,3 +981,10 @@ def test_chat_send_swaps_an_estimate_for_the_recipe_and_tells_the_model_the_reci
     assert "ok=" in c.post("/chat/confirm", data={"csrf": "tok", "id": pid}).headers["location"]
     e = k.food_entries(1)[-1]
     assert e["name"] == "Egg Bhurji Wrap with Salad x1 (from Mealie)" and e["kcal"] == 450 and e["protein_g"] == 25
+
+
+def test_withings_callback_answers_without_a_sign_in_and_reveals_nothing(tmp_path):
+    c = TestClient(web.create_app(ENV, web.Stores(str(tmp_path), "khushal", "Europe/London"), USERS, FakeVerifier()),
+                   base_url=BASE, follow_redirects=False)
+    r = c.get("/withings/callback")
+    assert r.status_code == 200 and r.json() == {"ok": True}
