@@ -988,3 +988,88 @@ def test_withings_callback_answers_without_a_sign_in_and_reveals_nothing(tmp_pat
                    base_url=BASE, follow_redirects=False)
     r = c.get("/withings/callback")
     assert r.status_code == 200 and r.json() == {"ok": True}
+
+
+# ------------------------------------------------------------------ Withings
+def withings_env(tmp_path, groups=None):
+    from app import withings as wmod
+    from tests.test_withings import FakeWithings, grp
+    fake = FakeWithings(groups if groups is not None else [grp(int(time.time()) - 300, 118, 79, 70)], updatetime=int(time.time()))
+    wc = wmod.Withings("cid", "csecret", f"{BASE}/withings/callback", httpx.Client(transport=httpx.MockTransport(fake)))
+    ver = FakeVerifier()
+    stores = web.Stores(str(tmp_path), "khushal", "Europe/London")
+    app = web.create_app(ENV, stores, USERS, ver, withings=wc)
+    return TestClient(app, base_url=BASE, follow_redirects=False), stores, fake
+
+
+def test_withings_callback_answers_the_registration_check_but_needs_a_sign_in_for_a_code(env):
+    c, _, _ = env
+    r = c.get("/withings/callback")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    r = c.get("/withings/callback?code=abc&state=x")
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+
+
+def test_withings_connect_sends_the_person_to_withings_with_a_state_and_needs_sign_in(tmp_path):
+    c, stores, _ = withings_env(tmp_path)
+    assert c.get("/withings/connect").status_code == 303 and c.get("/withings/connect").headers["location"] == "/login"
+    signed_in(c)
+    r = c.get("/withings/connect")
+    loc = r.headers["location"]
+    assert r.status_code == 303 and loc.startswith("https://account.withings.com/oauth2_user/authorize2?")
+    state = parse_qs(urlparse(loc).query)["state"][0]
+    assert stores.get("khushal").get_setting("withings_state").startswith(state + "|")
+
+
+def test_withings_callback_with_the_right_state_connects_and_pulls_readings(tmp_path):
+    c, stores, _ = withings_env(tmp_path)
+    signed_in(c)
+    loc = c.get("/withings/connect").headers["location"]
+    state = parse_qs(urlparse(loc).query)["state"][0]
+    r = c.get(f"/withings/callback?code=abc&state={state}")
+    assert r.status_code == 303 and r.headers["location"].startswith("/settings")
+    assert "1+reading" in r.headers["location"] or "1%20reading" in r.headers["location"]
+    st = stores.get("khushal")
+    rows = st._rows("SELECT systolic, source FROM blood_pressure")
+    assert [(x["systolic"], x["source"]) for x in rows] == [(118, "withings")]
+    assert st.get_setting("withings_tokens")
+    assert stores.get("shivani").get_setting("withings_tokens") is None       # only the person who connected
+
+
+def test_withings_callback_with_a_wrong_or_reused_state_is_refused_and_connects_nothing(tmp_path):
+    c, stores, _ = withings_env(tmp_path)
+    signed_in(c)
+    c.get("/withings/connect")
+    r = c.get("/withings/callback?code=abc&state=forged")
+    assert "err=" in r.headers["location"]
+    assert stores.get("khushal").get_setting("withings_tokens") is None
+    r = c.get("/withings/callback?code=abc&state=forged")                    # the real state is gone after one try
+    assert "err=" in r.headers["location"]
+    assert "err=" in c.get("/withings/callback?error=access_denied&state=x").headers["location"]
+
+
+def test_settings_page_shows_the_withings_card_only_when_it_is_set_up(env, tmp_path):
+    c, _, _ = env
+    signed_in(c)
+    assert "Withings" not in c.get("/settings").text
+    c2, _, _ = withings_env(tmp_path)
+    signed_in(c2)
+    page = c2.get("/settings").text
+    assert "Withings cuff" in page and 'href="/withings/connect"' in page
+
+
+def test_withings_check_now_and_disconnect_need_csrf_and_work_when_connected(tmp_path):
+    c, stores, _ = withings_env(tmp_path)
+    signed_in(c)
+    state = parse_qs(urlparse(c.get("/withings/connect").headers["location"]).query)["state"][0]
+    c.get(f"/withings/callback?code=abc&state={state}")
+    assert c.post("/settings/withings/sync", data={"csrf": "wrong"}).status_code == 403
+    r = c.post("/settings/withings/sync", data={"csrf": "tok"})
+    assert r.status_code == 303 and "err=" not in r.headers["location"]
+    assert "Check now" in c.get("/settings").text
+    assert c.post("/settings/withings/disconnect", data={"csrf": "wrong"}).status_code == 403
+    c.post("/settings/withings/disconnect", data={"csrf": "tok"})
+    st = stores.get("khushal")
+    assert st.get_setting("withings_tokens") is None
+    assert len(st._rows("SELECT 1 FROM blood_pressure")) == 1                # readings stay
+    assert "err=" in c.post("/settings/withings/sync", data={"csrf": "tok"}).headers["location"]

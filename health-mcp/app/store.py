@@ -400,6 +400,19 @@ class Store:
         return {"id": rid, "time": self.local_str(ts), "systolic": systolic,
                 "diastolic": diastolic, "pulse": pulse, "note": note}
 
+    def add_synced_bp(self, systolic: int, diastolic: int, pulse: int | None,
+                      when: datetime, note: str | None = None) -> bool:
+        """A reading from a connected cuff. True when it was new; implausible or repeated readings are skipped."""
+        if not (50 <= systolic <= 300 and 30 <= diastolic <= 200 and diastolic < systolic):
+            return False
+        if pulse is not None and not (20 <= pulse <= 260):
+            pulse = None
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO blood_pressure(time,systolic,diastolic,pulse,note,source) "
+                "VALUES(?,?,?,?,?,'withings')", (iso(when), systolic, diastolic, pulse, (note or "")[:500] or None))
+        return cur.rowcount > 0
+
     def log_meal(self, name: str, kcal: float, protein_g: float | None, carbs_g: float | None,
                  fat_g: float | None, fibre_g: float | None, sugar_g: float | None,
                  salt_g: float | None, when: datetime | None) -> dict[str, Any]:

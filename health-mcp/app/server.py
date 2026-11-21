@@ -255,6 +255,9 @@ def start_web(env: Mapping[str, str], store: Store) -> None:
     from . import reminders
     stores, users = app.state.stores, app.state.users
     reminders.start(lambda: {u: stores.get(u) for u in users}, reminders.make_notifier(app.state.ntfy_base))
+    if app.state.withings is not None:
+        from . import withings
+        withings.start(lambda: {u: stores.get(u) for u in users}, app.state.withings)
     log.info("web app listening on port %s", cfg.port)
 
 

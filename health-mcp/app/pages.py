@@ -248,7 +248,7 @@ def _last_import(store: Store) -> str:
     return f'<p><b>Last import:</b> {esc(v)}</p>' if v else '<p class="m">Nothing imported yet.</p>'
 
 
-def settings_page(store: Store, csrf: str, ntfy_base: str) -> str:
+def settings_page(store: Store, csrf: str, ntfy_base: str, withings: dict | None = None) -> str:
     tok = f'<input type="hidden" name="csrf" value="{esc(csrf)}">'
     on = store.get_setting("reminders_enabled") == "1"
     topic = store.get_setting("reminder_topic") or ""
@@ -264,6 +264,22 @@ def settings_page(store: Store, csrf: str, ntfy_base: str) -> str:
            f'<b>{esc(topic)}</b> (server {esc(ntfy_base)}). Anyone who knows the topic name can read the '
            f'reminders, so the messages never include health data.</p>' if topic else
            '<p class="m">Saving with reminders on will create a private topic name for you.</p>')
+    if withings is None:
+        wcard = ""
+    elif withings["connected"]:
+        wcard = ('<div class="card"><h2>Withings cuff</h2><p class="m" style="margin:0 0 6px">Connected. New readings from your '
+                 'Withings cuff are added about every 15 minutes and marked as coming from Withings.'
+                 + (f' Last checked {esc(withings["last_sync"])} (UTC).' if withings["last_sync"] else '') + '</p>'
+                 + (f'<p class="m" role="alert"><b>{esc(withings["error"])}</b></p>' if withings["error"] else '')
+                 + f'<form method="post" action="/settings/withings/sync">{tok}<button class="go">Check now</button></form>'
+                 f'<form method="post" action="/settings/withings/disconnect">{tok}<button class="go">Disconnect</button></form>'
+                 '<p class="m">Disconnecting stops new readings. Readings already saved stay.</p></div>')
+    else:
+        wcard = ('<div class="card"><h2>Withings cuff</h2><p class="m" style="margin:0 0 6px">Bring in readings from your '
+                 'Withings cuff without typing them. You will be asked to allow access on the Withings website.</p>'
+                 + (f'<p class="m" role="alert"><b>{esc(withings["error"])}</b></p>' if withings["error"] else '')
+                 + '<a class="go" href="/withings/connect" style="display:inline-block;text-align:center;text-decoration:none">'
+                 'Connect Withings</a></div>')
     mode_now, palette_now = store.get_setting("mode") or "auto", store.get_setting("palette") or "tide"
     appearance = (
         f'<div class="card"><h2>Appearance</h2><form method="post" action="/settings/appearance">{tok}'
@@ -305,6 +321,7 @@ def settings_page(store: Store, csrf: str, ntfy_base: str) -> str:
         f'<button class="go">Save</button></form>{sub}'
         + (f'<form method="post" action="/settings/test">{tok}<button class="go">Send a test reminder</button></form>'
            if topic else "") + '<p class="m">A reminder is skipped when you have already logged a reading in that half of the day.</p></div>'
+        + wcard +
         f'<div class="card"><h2>Note for your GP report</h2><form method="post" action="/settings/context">{tok}'
         f'<label>Shown at the top of the GP report (for example your medication and start date)</label>'
         f'<textarea name="context" rows="4" maxlength="600" style="width:100%;padding:9px;border:1px solid var(--line);'

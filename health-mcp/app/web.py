@@ -29,7 +29,7 @@ from starlette.routing import Route
 
 from pathlib import Path
 
-from . import analysis, apple, chat as chat_mod, mealie as mealie_mod, pages, reminders, views
+from . import analysis, apple, chat as chat_mod, mealie as mealie_mod, pages, reminders, views, withings as withings_mod
 from .auth import OIDCVerifier
 from .store import Store
 from .tools import _parse_when
@@ -130,7 +130,8 @@ class Stores:
 
 def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
                verifier: OIDCVerifier, http: httpx.AsyncClient | None = None,
-               notify: reminders.Notifier | None = None, mealie: Any = None) -> Starlette:
+               notify: reminders.Notifier | None = None, mealie: Any = None,
+               withings: Any = None) -> Starlette:
     ollama_url = (env.get("OLLAMA_URL") or "").strip()
     ollama_model = (env.get("OLLAMA_MODEL") or "gemma4:12b").strip()
     public = (env.get("WEB_PUBLIC_URL") or "").rstrip("/")
@@ -143,6 +144,7 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         raise WebConfigError("WEB_OIDC_CLIENT_ID and WEB_OIDC_CLIENT_SECRET are required")
     signer = Signer(env.get("WEB_SESSION_SECRET", ""))
     redirect_uri = f"{public}/callback"
+    wc = withings if withings is not None else withings_mod.client_from_env(env, f"{public}/withings/callback")
     client = http or httpx.AsyncClient(timeout=10)
     ntfy_base = (env.get("NTFY_BASE") or "https://ntfy.sh").rstrip("/")
     send = notify or reminders.make_notifier(ntfy_base)
@@ -488,7 +490,9 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         return page("GP report", pages.gp_page(store, users[s["u"]], days), s, "/gp", request)
 
     async def settings_get(request: Request, s: dict[str, Any], store: Store) -> Response:
-        return page("Settings", pages.settings_page(store, s["csrf"], ntfy_base), s, "/settings", request)
+        return page("Settings", pages.settings_page(store, s["csrf"], ntfy_base,
+                                                    withings=None if wc is None else withings_mod.status(store)),
+                    s, "/settings", request)
 
     async def settings_reminders(request: Request, s: dict[str, Any], store: Store) -> Response:
         f = request.state.form
@@ -654,11 +658,46 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
     async def healthz(request: Request) -> Response:
         return JSONResponse({"ok": True})
 
+    async def withings_connect(request: Request, s: dict[str, Any], store: Store) -> Response:
+        # A plain link, not a form: the page's form-action rule would stop a form from ending at Withings.
+        if wc is None:
+            return back("Withings is not set up on the server", True, "/settings")
+        return RedirectResponse(withings_mod.begin(store, wc), status_code=303)
+
     async def withings_callback(request: Request) -> Response:
-        # Withings checks this address when the developer app is registered, and sends people
-        # back to it after they allow access. The sign-in step comes later; for now it only
-        # has to answer, and it reveals nothing.
-        return JSONResponse({"ok": True})
+        q = request.query_params
+        if "code" not in q and "error" not in q:
+            return JSONResponse({"ok": True})      # Withings checks this address when the app is registered
+        if bad_host(request):
+            return headers(Response("bad host", status_code=400))
+        s = session_of(request)
+        if s is None:
+            return headers(RedirectResponse("/login", status_code=303))
+        store = stores.get(s["u"])
+        if wc is None or "error" in q or not withings_mod.check_state(store, str(q.get("state", ""))):
+            return headers(back("Withings was not connected", True, "/settings"))
+        try:
+            tokens = await asyncio.to_thread(wc.exchange, str(q.get("code", "")))
+        except withings_mod.WithingsError:
+            log.warning("withings code exchange failed")
+            return headers(back("Withings did not accept the connection. Please try again.", True, "/settings"))
+        withings_mod.save_tokens(store, tokens)
+        res = await asyncio.to_thread(withings_mod.sync, store, wc)
+        n = res.get("added", 0)
+        return headers(back(f"Withings connected. {n} reading{'s' if n != 1 else ''} added.", False, "/settings"))
+
+    async def withings_sync(request: Request, s: dict[str, Any], store: Store) -> Response:
+        if wc is None or not withings_mod.connected(store):
+            return back("Withings is not connected", True, "/settings")
+        res = await asyncio.to_thread(withings_mod.sync, store, wc)
+        if res.get("error"):
+            return back(str(res["error"]), True, "/settings")
+        n = res.get("added", 0)
+        return back(f"Checked Withings. {n} new reading{'s' if n != 1 else ''}.", False, "/settings")
+
+    async def withings_disconnect(request: Request, s: dict[str, Any], store: Store) -> Response:
+        withings_mod.disconnect(store)
+        return back("Withings disconnected. Readings already saved are kept.", False, "/settings")
 
     return Starlette(routes=[
         Route("/", authed(today)), Route("/log", authed(log_get)),
@@ -695,6 +734,9 @@ def create_app(env: Mapping[str, str], stores: Stores, users: dict[str, str],
         Route("/logout", authed(logout, post=True), methods=["POST"]),
         Route("/login", login), Route("/callback", callback), Route("/healthz", healthz),
         Route("/withings/callback", withings_callback),
+        Route("/withings/connect", authed(withings_connect)),
+        Route("/settings/withings/sync", authed(withings_sync, post=True), methods=["POST"]),
+        Route("/settings/withings/disconnect", authed(withings_disconnect, post=True), methods=["POST"]),
     ])
 
 
@@ -720,4 +762,5 @@ def build(env: Mapping[str, str], primary: Store | None = None, stores: Stores |
     app = create_app(env, stores, users, verifier, mealie=clients or None)
     app.state.stores, app.state.users = stores, users
     app.state.ntfy_base = (env.get("NTFY_BASE") or "https://ntfy.sh").rstrip("/")
+    app.state.withings = withings_mod.client_from_env(env, f"{env['WEB_PUBLIC_URL'].rstrip('/')}/withings/callback")
     return app
